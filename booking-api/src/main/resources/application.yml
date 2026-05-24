@@ -1,0 +1,37 @@
+spring:
+  application:
+    name: booking-api
+  datasource:
+    url: jdbc:mysql://localhost:3306/leopay?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: leopay
+    password: leopay
+  jpa:
+    hibernate:
+      ddl-auto: none
+    defer-datasource-initialization: true
+    properties:
+      hibernate:
+        format_sql: true
+  h2:
+    console:
+      enabled: true
+  data:
+    redis:
+      host: localhost
+      port: 6379
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+server:
+  port: 8080
+
+pg:
+  base-url: http://localhost:8081
+  delay: 0  # 0 = 지연 없음 / 타임아웃 테스트 시 15000 (ms) 으로 변경
+
+app:
+  load-level: normal  # normal: 10초 / peak: 20초

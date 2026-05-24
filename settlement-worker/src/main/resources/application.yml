@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: settlement-worker
+  datasource:
+    url: jdbc:mysql://localhost:3306/leopay?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: leopay
+    password: leopay
+  jpa:
+    hibernate:
+      ddl-auto: none
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: settlement-consumer-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+  batch:
+    job:
+      enabled: false  # 자동 실행 비활성화 (Week 4에서 스케줄 설정)
