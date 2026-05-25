@@ -1,4 +1,4 @@
-rootProject.name = "payment-service"
+rootProject.name = "leopay"
 
 include(
     "core:core-enum",

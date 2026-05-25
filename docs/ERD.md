@@ -75,7 +75,7 @@ erDiagram
         bigint payment_id FK "결제 ID"
         varchar(20) type "PAYMENT_COMPLETED / PAYMENT_CANCELED"
         varchar(20) status "PENDING / SENT / FAILED"
-        int retry_count "재시도 횟수 (DLQ 재처리 추적)"
+        int retry_count "재시도 횟수 (DLT 재처리 추적)"
         varchar(500) failure_reason "실패 사유"
         datetime sent_at "발송 완료 시각"
         datetime created_at "생성 시각"
@@ -188,9 +188,9 @@ READY → IN_PROGRESS → APPROVED → CANCEL_IN_PROGRESS → CANCELED
 
 | 설계 포인트 | 근거 |
 |------------|------|
-| `retry_count` | DLQ 재처리 횟수 추적. 최대 재시도 횟수 정책 적용 가능 |
+| `retry_count` | DLT 재처리 횟수 추적. 최대 재시도 횟수 정책 적용 가능 |
 | `status` | PENDING(생성) -> SENT(성공) / FAILED(최종실패). Kafka Consumer 처리 결과 기록 |
-| `failure_reason` | 실패 원인 분석용. DLQ에서 재처리 판단 근거 |
+| `failure_reason` | 실패 원인 분석용. DLT에서 재처리 판단 근거 |
 
 ### 3.5 SETTLEMENT (정산)
 
