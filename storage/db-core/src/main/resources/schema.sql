@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS merchant (
 -- ── PAYMENT (결제) ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS payment (
     id                 BIGINT       NOT NULL AUTO_INCREMENT,
-    order_id           VARCHAR(64)  NOT NULL COMMENT '가맹점 주문번호 (멱등성 키)',
+    payment_key        VARCHAR(64)  NOT NULL COMMENT '결제 고유 키 (멱등성 키)',
     merchant_id        BIGINT       NOT NULL COMMENT '가맹점 ID',
     user_id            VARCHAR(64)  NOT NULL COMMENT 'X-User-Id 헤더 값',
     amount             DECIMAL(12,0) NOT NULL COMMENT '결제 금액 (원 단위)',
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS payment (
     created_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_payment_order_id (order_id),
+    UNIQUE KEY uk_payment_payment_key (payment_key),
     CONSTRAINT fk_payment_merchant FOREIGN KEY (merchant_id) REFERENCES merchant (id),
     INDEX idx_payment_merchant_status  (merchant_id, status),
     INDEX idx_payment_merchant_approved (merchant_id, approved_at),

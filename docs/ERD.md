@@ -47,7 +47,7 @@ erDiagram
 
     PAYMENT {
         bigint id PK "auto_increment"
-        varchar(64) order_id UK "가맹점 주문번호 (멱등성 키 역할)"
+        varchar(64) payment_key UK "결제 고유 키 (멱등성 키 역할)"
         bigint merchant_id FK "가맹점 ID"
         varchar(64) user_id "X-User-Id 헤더 값"
         decimal(12_0) amount "결제 금액 (원 단위, 소수점 없음)"
@@ -136,7 +136,7 @@ erDiagram
 
 | 설계 포인트 | 근거 |
 |------------|------|
-| `order_id` UNIQUE | 가맹점이 발급하는 주문번호. 멱등성 키의 DB 레벨 보장 (Redis TTL 만료 후에도 중복 방지) |
+| `payment_key` UNIQUE | 결제 요청 시 클라이언트가 발급하는 결제 고유 키. 멱등성 키의 DB 레벨 보장 (Redis TTL 만료 후에도 중복 방지) |
 | `user_id` varchar(64) | FK 없음. Auth가 API Gateway 책임이므로 식별값만 저장 |
 | `amount` decimal(12,0) | 원화 기준 소수점 없음. 최대 9,999억원까지 표현 |
 | `pg_transaction_id` | PG사 응답의 거래번호. 대사(reconciliation) 및 취소 요청 시 사용 |
@@ -231,7 +231,7 @@ READY → IN_PROGRESS → APPROVED → CANCEL_IN_PROGRESS → CANCELED
 | 테이블 | 컬럼 | 용도 |
 |--------|------|------|
 | `merchant` | `business_number` | 사업자번호 중복 방지 |
-| `payment` | `order_id` | 멱등성 키. Redis TTL 만료 후 DB 레벨 최종 방어선 |
+| `payment` | `payment_key` | 멱등성 키. Redis TTL 만료 후 DB 레벨 최종 방어선 |
 | `settlement` | `(merchant_id, settlement_date)` | 가맹점별 일일 정산 유일성 보장 |
 
 ### 4.3 일반 Index
