@@ -1,5 +1,6 @@
 package com.leopay.bookingapi.exception
 
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.MethodArgumentNotValidException
@@ -35,6 +36,11 @@ class GlobalExceptionHandler {
     fun handlePgCommunicationFailed(e: PaymentException.PgCommunicationFailed): ResponseEntity<ErrorResponse> =
         ResponseEntity.status(HttpStatus.BAD_GATEWAY)
             .body(ErrorResponse("PG_COMMUNICATION_FAILED", e.message ?: "PG communication failed"))
+
+    @ExceptionHandler(DataIntegrityViolationException::class)
+    fun handleDataIntegrityViolation(e: DataIntegrityViolationException): ResponseEntity<ErrorResponse> =
+        ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(ErrorResponse("DUPLICATE_PAYMENT", "Duplicate payment key"))
 
     @ExceptionHandler(MethodArgumentNotValidException::class)
     fun handleMethodArgumentNotValid(e: MethodArgumentNotValidException): ResponseEntity<ErrorResponse> {
