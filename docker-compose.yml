@@ -5,10 +5,10 @@ services:
     image: mysql:8.0
     container_name: leopay-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_PASSWORD: 1234
       MYSQL_DATABASE: leopay
       MYSQL_USER: leopay
-      MYSQL_PASSWORD: leopay
+      MYSQL_PASSWORD: 1234
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     ports:
       - "3306:3306"
