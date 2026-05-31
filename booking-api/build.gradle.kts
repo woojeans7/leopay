@@ -24,6 +24,7 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.kafka:spring-kafka-test")
     testImplementation("io.mockk:mockk:1.13.10")
+    testImplementation("com.ninja-squad:springmockk:4.0.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
 
