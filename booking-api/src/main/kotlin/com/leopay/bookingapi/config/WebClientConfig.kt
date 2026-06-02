@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.http.client.reactive.ReactorClientHttpConnector
 import org.springframework.web.reactive.function.client.WebClient
 import reactor.netty.http.client.HttpClient
+import java.time.Duration
 
 @Configuration
 class WebClientConfig {
@@ -18,6 +19,7 @@ class WebClientConfig {
     fun pgWebClient(): WebClient {
         val httpClient = HttpClient.create()
             .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 3_000)
+            .responseTimeout(Duration.ofSeconds(5))
 
         return WebClient.builder()
             .baseUrl(pgBaseUrl)
