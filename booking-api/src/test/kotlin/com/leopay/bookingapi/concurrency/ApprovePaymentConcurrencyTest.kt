@@ -16,6 +16,7 @@ import io.mockk.coEvery
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.redisson.api.RedissonClient
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration
 import org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
@@ -55,6 +56,9 @@ class ApprovePaymentConcurrencyTest {
     @Autowired
     private lateinit var txManager: PlatformTransactionManager
 
+    @Autowired
+    private lateinit var redissonClient: RedissonClient
+
     @MockkBean
     private lateinit var outboxPublisher: OutboxPublisher
 
@@ -63,6 +67,8 @@ class ApprovePaymentConcurrencyTest {
 
     @BeforeEach
     fun setUp() {
+        // 멱등성 캐시 초기화: 이전 테스트 실행에서 남은 Redis 키가 결과에 영향을 주지 않도록 한다
+        redissonClient.keys.deleteByPattern("idempotency:*")
         paymentHistoryRepository.deleteAll()
         outboxEventRepository.deleteAll()
         paymentRepository.deleteAll()
