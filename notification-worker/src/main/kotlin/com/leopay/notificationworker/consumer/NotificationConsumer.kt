@@ -9,13 +9,16 @@ import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.stereotype.Component
 
 /**
- * A-4 1단계(문제 재현): 에러 핸들러/DLT 설정 없음
+ * A-4 2단계(해결 완료): KafkaConsumerConfig 에 DefaultErrorHandler + DLT 적용
  *
- * 처리 중 예외 발생 시 Spring Kafka 기본 동작:
- *   DefaultErrorHandler → 최대 9회 재시도 후 offset commit → 메시지 영구 유실
+ * 1단계 문제:
+ *   에러 핸들러/DLT 설정 없음 → 기본 9회 재시도 후 offset commit → 메시지 영구 유실
  *   DLT 없음 → 실패한 메시지 추적/재처리 불가 → 알림 미발송
  *
- * 2단계에서 DefaultErrorHandler(3회) + DeadLetterPublishingRecoverer 추가로 해결
+ * 2단계 해결:
+ *   - KafkaConsumerConfig: DefaultErrorHandler(FixedBackOff 1초 × 3회) + DeadLetterPublishingRecoverer
+ *   - 재시도 3회 소진 시 <토픽>.DLT 로 이동 → DltNotificationConsumer 가 FAILED 이력 저장
+ *   - 메시지 유실 0건, 수동 재처리 이력 보존
  */
 @Component
 class NotificationConsumer(

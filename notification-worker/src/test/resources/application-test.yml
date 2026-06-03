@@ -9,3 +9,8 @@ spring:
       ddl-auto: none
   kafka:
     bootstrap-servers: localhost:9092
+  main:
+    # @TestConfiguration 이 운영 Bean 을 override 할 수 있도록 허용
+    # NotificationMessageLossTest.FastErrorHandlerConfig 가 KafkaConsumerConfig 의
+    # kafkaListenerContainerFactory 를 덮어쓰기 위해 필요
+    allow-bean-definition-overriding: true

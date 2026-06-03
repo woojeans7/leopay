@@ -10,4 +10,6 @@ interface NotificationRepository : JpaRepository<NotificationEntity, Long> {
     fun findByStatusOrderByCreatedAtAsc(status: NotificationStatus, pageable: Pageable): List<NotificationEntity>
 
     fun findByPaymentId(paymentId: Long): List<NotificationEntity>
+
+    fun countByStatus(status: NotificationStatus): Long
 }
