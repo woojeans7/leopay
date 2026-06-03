@@ -1,6 +1,7 @@
 package com.leopay.notificationworker.config
 
 import org.apache.kafka.clients.consumer.ConsumerRecord
+import org.apache.kafka.common.TopicPartition
 import org.slf4j.LoggerFactory
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -41,7 +42,9 @@ class KafkaConsumerConfig {
     fun deadLetterPublishingRecoverer(
         kafkaTemplate: KafkaTemplate<String, String>,
     ): DeadLetterPublishingRecoverer =
-        DeadLetterPublishingRecoverer(kafkaTemplate as KafkaTemplate<Any, Any>)
+        DeadLetterPublishingRecoverer(kafkaTemplate as KafkaTemplate<Any, Any>) { cr, _ ->
+            TopicPartition("${cr.topic()}.DLT", cr.partition())
+        }
 
     /**
      * DefaultErrorHandler:

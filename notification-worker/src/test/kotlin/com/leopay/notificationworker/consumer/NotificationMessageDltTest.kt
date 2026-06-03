@@ -1,8 +1,12 @@
 package com.leopay.notificationworker.consumer
 
 import com.leopay.core.enums.NotificationStatus
+import com.leopay.core.enums.PaymentMethod
+import com.leopay.core.enums.PaymentStatus
 import com.leopay.notificationworker.service.NotificationService
+import com.leopay.storage.entity.PaymentEntity
 import com.leopay.storage.repository.NotificationRepository
+import com.leopay.storage.repository.PaymentRepository
 import com.ninjasquad.springmockk.SpykBean
 import io.mockk.every
 import org.assertj.core.api.Assertions.assertThat
@@ -13,6 +17,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.kafka.core.KafkaTemplate
 import org.springframework.kafka.test.context.EmbeddedKafka
 import org.springframework.test.context.ActiveProfiles
+import java.math.BigDecimal
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -47,13 +52,28 @@ class NotificationMessageDltTest {
 
     @Autowired private lateinit var kafkaTemplate: KafkaTemplate<String, String>
     @Autowired private lateinit var notificationRepository: NotificationRepository
+    @Autowired private lateinit var paymentRepository: PaymentRepository
+    @Autowired private lateinit var paymentHistoryRepository: com.leopay.storage.repository.PaymentHistoryRepository
 
-    /** sendApprovedNotification 에 예외를 주입해 재시도/DLT 흐름을 유도한다. */
     @SpykBean private lateinit var notificationService: NotificationService
+
+    private var testPaymentId: Long = 0L
 
     @BeforeEach
     fun setUp() {
         notificationRepository.deleteAll()
+        paymentHistoryRepository.deleteAll()
+        paymentRepository.deleteAll()
+        testPaymentId = paymentRepository.save(
+            PaymentEntity(
+                paymentKey = "dlt-test-${System.nanoTime()}",
+                merchantId = 1L,
+                userId = "user-1",
+                amount = BigDecimal("10000"),
+                method = PaymentMethod.CARD,
+                status = PaymentStatus.READY,
+            )
+        ).id!!
     }
 
     /**
@@ -73,7 +93,7 @@ class NotificationMessageDltTest {
             throw RuntimeException("외부 알림 서비스 연결 실패 (시뮬레이션)")
         }
 
-        kafkaTemplate.send("payment.approved", """{"paymentId":999}""")
+        kafkaTemplate.send("payment.approved", """{"paymentId":$testPaymentId}""")
 
         // 검증 1: 컨슈머가 정확히 4회 호출됨 (1회 + 3회 재시도)
         // FixedBackOff(1000L, 3L) → 최대 3초 대기 + 여유 2초 = 5초
@@ -101,7 +121,7 @@ class NotificationMessageDltTest {
 
         assertThat(failedNotification.paymentId)
             .`as`("저장된 FAILED 이력의 paymentId 가 일치해야 한다")
-            .isEqualTo(999L)
+            .isEqualTo(testPaymentId)
 
         assertThat(failedNotification.failureReason)
             .`as`("failureReason 이 기록되어야 한다")
