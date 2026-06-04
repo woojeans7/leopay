@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS notification (
     updated_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     CONSTRAINT fk_notification_payment FOREIGN KEY (payment_id) REFERENCES payment (id),
+    UNIQUE KEY uk_notification_payment_type (payment_id, type),
     INDEX idx_notification_status  (status, created_at),
     INDEX idx_notification_payment (payment_id)
 ) DEFAULT CHARACTER SET utf8mb4;
