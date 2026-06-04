@@ -10,10 +10,17 @@ import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Table
+import jakarta.persistence.UniqueConstraint
 import java.time.LocalDateTime
 
 @Entity
-@Table(name = "notification")
+@Table(
+    name = "notification",
+    uniqueConstraints = [
+        // B-3: paymentId + type 조합 유일성 → DB 레벨 중복 저장 최종 방어선
+        UniqueConstraint(name = "uk_notification_payment_type", columnNames = ["payment_id", "type"]),
+    ]
+)
 class NotificationEntity(
 
     @Id
