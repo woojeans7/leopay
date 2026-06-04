@@ -4,6 +4,8 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     username: leopay
     password: 1234
+    hikari:
+      maximum-pool-size: 100
   jpa:
     hibernate:
       ddl-auto: none

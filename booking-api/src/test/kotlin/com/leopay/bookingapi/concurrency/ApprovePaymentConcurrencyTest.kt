@@ -1,18 +1,23 @@
 package com.leopay.bookingapi.concurrency
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.leopay.bookingapi.gateway.PaymentGateway
 import com.leopay.bookingapi.gateway.dto.PgApproveResponse
+import com.leopay.bookingapi.idempotency.IdempotencyManager
+import com.leopay.bookingapi.lock.LockManager
+import com.leopay.bookingapi.lock.RedisLockManager
 import com.leopay.bookingapi.outbox.OutboxPublisher
 import com.leopay.bookingapi.service.PaymentService
 import com.leopay.core.enums.PaymentMethod
 import com.leopay.core.enums.PaymentStatus
 import com.leopay.storage.entity.PaymentEntity
-import com.leopay.storage.entity.PaymentHistoryEntity
+import com.leopay.storage.repository.NotificationRepository
 import com.leopay.storage.repository.OutboxEventRepository
 import com.leopay.storage.repository.PaymentHistoryRepository
 import com.leopay.storage.repository.PaymentRepository
 import com.ninjasquad.springmockk.MockkBean
 import io.mockk.coEvery
+import io.mockk.every
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -54,10 +59,16 @@ class ApprovePaymentConcurrencyTest {
     private lateinit var outboxEventRepository: OutboxEventRepository
 
     @Autowired
+    private lateinit var notificationRepository: NotificationRepository
+
+    @Autowired
     private lateinit var txManager: PlatformTransactionManager
 
     @Autowired
     private lateinit var redissonClient: RedissonClient
+
+    @Autowired
+    private lateinit var objectMapper: ObjectMapper
 
     @MockkBean
     private lateinit var outboxPublisher: OutboxPublisher
@@ -65,31 +76,107 @@ class ApprovePaymentConcurrencyTest {
     @MockkBean
     private lateinit var gateway: PaymentGateway
 
+    @MockkBean
+    private lateinit var lockManager: LockManager
+
+    @MockkBean
+    private lateinit var idempotencyManager: IdempotencyManager
+
+    /**
+     * 실제 Redis 분산락 구현체 인스턴스.
+     * @MockkBean이 컨텍스트에서 LockManager를 mock으로 교체하므로
+     * 여기서 직접 생성해 락 있는 테스트의 withLock 위임에 사용한다.
+     */
+    private lateinit var realLockManager: RedisLockManager
+
+    /**
+     * 실제 멱등성 처리 구현체 인스턴스.
+     * @MockkBean이 컨텍스트에서 IdempotencyManager를 mock으로 교체하므로
+     * 여기서 직접 생성해 락 있는 테스트의 execute 위임에 사용한다.
+     */
+    private lateinit var realIdempotencyManager: IdempotencyManager
+
     @BeforeEach
     fun setUp() {
+        realLockManager = RedisLockManager(redissonClient)
+        realIdempotencyManager = IdempotencyManager(redissonClient, objectMapper)
+
         // 멱등성 캐시 초기화: 이전 테스트 실행에서 남은 Redis 키가 결과에 영향을 주지 않도록 한다
         redissonClient.keys.deleteByPattern("idempotency:*")
+        notificationRepository.deleteAll()
         paymentHistoryRepository.deleteAll()
         outboxEventRepository.deleteAll()
         paymentRepository.deleteAll()
 
+        // OutboxPublisher는 Kafka 미연결 환경에서 예외를 던지지 않도록 no-op 처리
+        every { outboxPublisher.publish() } returns Unit
+
+        // gateway 기본 mock: 즉시 응답 (락 있는 테스트 기본값. 락 없는 테스트는 내부에서 delay 포함 mock으로 override)
         coEvery { gateway.approve(any()) } returns PgApproveResponse(
-            pgTransactionId = "PG-test-${System.nanoTime()}",
+            pgTransactionId = "PG-default",
             approvedAt = LocalDateTime.now(),
         )
+
+        // 기본값: 실제 Redis 분산락 위임 (락 있는 테스트용. 락 없는 테스트는 내부에서 no-op으로 override)
+        every { lockManager.withLock(any<String>(), any<String>(), any<() -> Any>()) } answers {
+            val prefix = firstArg<String>()
+            val key = secondArg<String>()
+            val block = thirdArg<() -> Any>()
+            realLockManager.withLock(prefix, key, block)
+        }
+        every { lockManager.withLock(any<String>(), any<() -> Any>()) } answers {
+            val paymentKey = firstArg<String>()
+            val block = secondArg<() -> Any>()
+            realLockManager.withLock(paymentKey, block)
+        }
+
+        // 기본값: 실제 멱등성 처리 위임 (락 있는 테스트용. 락 없는 테스트는 내부에서 no-op으로 override)
+        every { idempotencyManager.execute(any(), any(), any<Class<Any>>(), any<() -> Any>()) } answers {
+            val apiName = firstArg<String>()
+            val idempotencyKey = secondArg<String>()
+            @Suppress("UNCHECKED_CAST")
+            val responseClass = thirdArg<Class<Any>>()
+            val block = lastArg<() -> Any>()
+            realIdempotencyManager.execute(apiName, idempotencyKey, responseClass, block)
+        }
     }
 
     /**
      * 락 없을 때 중복 승인 재현:
-     * 락 없이 다수 스레드가 동시에 결제를 승인하면 중복이 발생함을 보여준다.
-     * 각 스레드가 독립 트랜잭션으로 직접 repository를 호출해 "락 없는 환경"을 시뮬레이션.
+     * 분산락과 멱등성 관리를 no-op으로 비활성화한 상태에서
+     * 100개 스레드가 동시에 paymentService.approvePayment()를 호출한다.
+     *
+     * 재현 원리:
+     *   - gateway.approve()에서 Thread.sleep(100ms)으로 PG 응답 지연 시뮬레이션
+     *   - 100개 스레드가 동시에 READY → IN_PROGRESS 전이 시도
+     *   - 락 없는 환경이므로 여러 스레드가 중복으로 READY 상태를 읽고 IN_PROGRESS로 전이 가능
+     *   - APPROVED 이력이 2건 이상이면 중복 승인 재현 성공
+     *
      * assert 없이 로그로만 확인 — 테스트는 항상 통과한다.
      */
     @Test
     fun `동시 100req - 락 없을 때 중복 승인 발생`() {
+        // LockManager no-op: 락 획득 없이 즉시 블록 실행
+        every { lockManager.withLock(any<String>(), any<String>(), any<() -> Any>()) } answers {
+            val block = thirdArg<() -> Any>()
+            block()
+        }
+        // IdempotencyManager no-op: 멱등성 체크 없이 즉시 블록 실행
+        every { idempotencyManager.execute(any(), any(), any<Class<Any>>(), any<() -> Any>()) } answers {
+            val block = lastArg<() -> Any>()
+            block()
+        }
+        // gateway: 100ms 지연 후 응답 — 이 딜레이 동안 여러 스레드가 중복으로 처리 진입 가능
+        coEvery { gateway.approve(any()) } coAnswers {
+            Thread.sleep(100L)
+            PgApproveResponse(
+                pgTransactionId = "PG-${Thread.currentThread().threadId()}",
+                approvedAt = LocalDateTime.now(),
+            )
+        }
+
         val txTemplate = TransactionTemplate(txManager)
 
-        // READY 상태 결제 저장
         val paymentId = txTemplate.execute {
             paymentRepository.save(
                 PaymentEntity(
@@ -110,35 +197,15 @@ class ApprovePaymentConcurrencyTest {
         val successCount = AtomicInteger(0)
         val failCount = AtomicInteger(0)
 
-        // 락 없이 각 스레드가 독립 트랜잭션으로 상태 전이를 시도 → 동시성 문제 재현
         repeat(threadCount) {
             executor.submit {
                 try {
                     startLatch.await()
-                    txTemplate.execute {
-                        val payment = paymentRepository.findById(paymentId)
-                            .orElseThrow { IllegalStateException("not found") }
-
-                        if (payment.status == PaymentStatus.READY) {
-                            payment.transitionTo(PaymentStatus.IN_PROGRESS)
-                            payment.transitionTo(PaymentStatus.APPROVED)
-                            payment.pgTransactionId = "PG-${Thread.currentThread().threadId()}"
-                            payment.approvedAt = LocalDateTime.now()
-
-                            paymentHistoryRepository.save(
-                                PaymentHistoryEntity(
-                                    paymentId = paymentId,
-                                    previousStatus = PaymentStatus.IN_PROGRESS,
-                                    newStatus = PaymentStatus.APPROVED,
-                                )
-                            )
-                            successCount.incrementAndGet()
-                        } else {
-                            failCount.incrementAndGet()
-                        }
-                    }
+                    paymentService.approvePayment(paymentId)
+                    successCount.incrementAndGet()
                 } catch (e: Exception) {
-                    failCount.incrementAndGet()
+                    val count = failCount.incrementAndGet()
+                    if (count <= 3) println("[FAIL] ${e::class.simpleName}: ${e.message?.take(100)}")
                 } finally {
                     doneLatch.countDown()
                 }

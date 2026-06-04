@@ -9,7 +9,7 @@ import com.leopay.bookingapi.gateway.PaymentGateway
 import com.leopay.bookingapi.gateway.dto.PgApproveRequest
 import com.leopay.bookingapi.gateway.dto.PgCancelRequest
 import com.leopay.bookingapi.idempotency.IdempotencyManager
-import com.leopay.bookingapi.lock.RedisLockManager
+import com.leopay.bookingapi.lock.LockManager
 import com.leopay.core.enums.PaymentStatus
 import com.leopay.storage.entity.OutboxEventEntity
 import com.leopay.storage.entity.PaymentEntity
@@ -30,7 +30,7 @@ class PaymentService(
     private val paymentRepository: PaymentRepository,
     private val outboxEventRepository: OutboxEventRepository,
     private val paymentHistoryRepository: PaymentHistoryRepository,
-    private val lockManager: RedisLockManager,
+    private val lockManager: LockManager,
     private val idempotencyManager: IdempotencyManager,
     private val gateway: PaymentGateway,
     txManager: PlatformTransactionManager,
