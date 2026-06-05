@@ -16,6 +16,17 @@ spring:
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+  data:
+    redis:
+      host: localhost
+      port: 6379
   batch:
     job:
       enabled: false  # 자동 실행 비활성화 (Week 4에서 스케줄 설정)
+
+settlement:
+  batch:
+    chunk-size: 100  # A-5: 10/50/100/500/1000으로 바꿔가며 성능 측정
