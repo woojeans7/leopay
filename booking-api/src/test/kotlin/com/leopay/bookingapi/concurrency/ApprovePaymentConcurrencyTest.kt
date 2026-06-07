@@ -15,6 +15,7 @@ import com.leopay.storage.repository.NotificationRepository
 import com.leopay.storage.repository.OutboxEventRepository
 import com.leopay.storage.repository.PaymentHistoryRepository
 import com.leopay.storage.repository.PaymentRepository
+import com.leopay.storage.repository.SettlementDetailRepository
 import com.ninjasquad.springmockk.MockkBean
 import io.mockk.coEvery
 import io.mockk.every
@@ -62,6 +63,9 @@ class ApprovePaymentConcurrencyTest {
     private lateinit var notificationRepository: NotificationRepository
 
     @Autowired
+    private lateinit var settlementDetailRepository: SettlementDetailRepository
+
+    @Autowired
     private lateinit var txManager: PlatformTransactionManager
 
     @Autowired
@@ -103,6 +107,7 @@ class ApprovePaymentConcurrencyTest {
 
         // 멱등성 캐시 초기화: 이전 테스트 실행에서 남은 Redis 키가 결과에 영향을 주지 않도록 한다
         redissonClient.keys.deleteByPattern("idempotency:*")
+        settlementDetailRepository.deleteAll()
         notificationRepository.deleteAll()
         paymentHistoryRepository.deleteAll()
         outboxEventRepository.deleteAll()
