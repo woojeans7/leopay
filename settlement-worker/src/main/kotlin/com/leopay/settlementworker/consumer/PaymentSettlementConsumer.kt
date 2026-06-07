@@ -5,6 +5,7 @@ import com.leopay.settlementworker.dto.PaymentEvent
 import com.leopay.settlementworker.service.SettlementDetailService
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.slf4j.LoggerFactory
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.stereotype.Component
 
@@ -37,6 +38,8 @@ class PaymentSettlementConsumer(
      * 이후 배치가 settlement_detail 기준으로 집계하여 정산을 완료한다.
      *
      * B-3/B-5 처리는 SettlementDetailService 내부에서 수행한다.
+     * DataIntegrityViolationException(unique constraint 위반) 은 중복 소비이므로
+     * consumer 레벨(트랜잭션 경계 바깥)에서 catch 하여 DLT 미발동 처리한다.
      */
     @KafkaListener(
         topics = ["payment.approved"],
@@ -45,6 +48,11 @@ class PaymentSettlementConsumer(
     )
     fun onPaymentApproved(record: ConsumerRecord<String, String>) {
         val event = objectMapper.readValue(record.value(), PaymentEvent::class.java)
-        settlementDetailService.saveSettlementDetail(event.paymentId, source = "consumer")
+        try {
+            settlementDetailService.saveSettlementDetail(event.paymentId, source = "consumer")
+        } catch (e: DataIntegrityViolationException) {
+            // 동시 중복 소비 — unique constraint 위반은 정상 idempotency skip → DLT 미발동
+            log.warn("[idempotency] 중복 소비 skip paymentId={}", event.paymentId)
+        }
     }
 }

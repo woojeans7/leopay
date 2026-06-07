@@ -6,6 +6,7 @@ import com.leopay.storage.entity.PaymentEntity
 import com.leopay.storage.repository.NotificationRepository
 import com.leopay.storage.repository.PaymentHistoryRepository
 import com.leopay.storage.repository.PaymentRepository
+import com.leopay.storage.repository.SettlementDetailRepository
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -47,12 +48,14 @@ class NotificationIdempotencyTest {
     @Autowired private lateinit var notificationRepository: NotificationRepository
     @Autowired private lateinit var paymentRepository: PaymentRepository
     @Autowired private lateinit var paymentHistoryRepository: PaymentHistoryRepository
+    @Autowired private lateinit var settlementDetailRepository: SettlementDetailRepository
 
     private var testPaymentId: Long = 0L
 
     @BeforeEach
     fun setUp() {
         notificationRepository.deleteAll()
+        settlementDetailRepository.deleteAll()
         paymentHistoryRepository.deleteAll()
         paymentRepository.deleteAll()
         testPaymentId = paymentRepository.save(

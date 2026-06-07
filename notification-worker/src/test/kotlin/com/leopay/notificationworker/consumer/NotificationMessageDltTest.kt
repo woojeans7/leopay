@@ -7,6 +7,7 @@ import com.leopay.notificationworker.service.NotificationService
 import com.leopay.storage.entity.PaymentEntity
 import com.leopay.storage.repository.NotificationRepository
 import com.leopay.storage.repository.PaymentRepository
+import com.leopay.storage.repository.SettlementDetailRepository
 import com.ninjasquad.springmockk.SpykBean
 import io.mockk.every
 import org.assertj.core.api.Assertions.assertThat
@@ -54,6 +55,7 @@ class NotificationMessageDltTest {
     @Autowired private lateinit var notificationRepository: NotificationRepository
     @Autowired private lateinit var paymentRepository: PaymentRepository
     @Autowired private lateinit var paymentHistoryRepository: com.leopay.storage.repository.PaymentHistoryRepository
+    @Autowired private lateinit var settlementDetailRepository: SettlementDetailRepository
 
     @SpykBean private lateinit var notificationService: NotificationService
 
@@ -62,6 +64,7 @@ class NotificationMessageDltTest {
     @BeforeEach
     fun setUp() {
         notificationRepository.deleteAll()
+        settlementDetailRepository.deleteAll()
         paymentHistoryRepository.deleteAll()
         paymentRepository.deleteAll()
         testPaymentId = paymentRepository.save(

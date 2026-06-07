@@ -17,6 +17,14 @@ class NotificationService(
 
     @Transactional
     fun sendApprovedNotification(paymentId: Long) {
+        // B-3: check+save 동일 트랜잭션 안에서 처리 (TOCTOU 방지)
+        if (notificationRepository.existsByPaymentIdAndTypeAndStatus(
+                paymentId, NotificationType.PAYMENT_COMPLETED, NotificationStatus.SENT
+            )
+        ) {
+            log.warn("[idempotency] 중복 skip paymentId={} type=PAYMENT_COMPLETED", paymentId)
+            return
+        }
         val notification = notificationRepository.save(
             NotificationEntity(
                 paymentId = paymentId,
@@ -31,6 +39,14 @@ class NotificationService(
 
     @Transactional
     fun sendCanceledNotification(paymentId: Long) {
+        // B-3: check+save 동일 트랜잭션 안에서 처리 (TOCTOU 방지)
+        if (notificationRepository.existsByPaymentIdAndTypeAndStatus(
+                paymentId, NotificationType.PAYMENT_CANCELED, NotificationStatus.SENT
+            )
+        ) {
+            log.warn("[idempotency] 중복 skip paymentId={} type=PAYMENT_CANCELED", paymentId)
+            return
+        }
         val notification = notificationRepository.save(
             NotificationEntity(
                 paymentId = paymentId,
@@ -41,5 +57,19 @@ class NotificationService(
         log.info("[notification] 결제 취소 알림 발송 paymentId={}", paymentId)
         notification.status = NotificationStatus.SENT
         notification.sentAt = LocalDateTime.now()
+    }
+
+    // A-4: DLT consumer용 — FAILED 이력 저장
+    @Transactional
+    fun saveFailedNotification(paymentId: Long, type: NotificationType, failureReason: String) {
+        notificationRepository.save(
+            NotificationEntity(
+                paymentId = paymentId,
+                type = type,
+                status = NotificationStatus.FAILED,
+                failureReason = failureReason.take(500),
+            )
+        )
+        log.info("[dlt] FAILED 알림 이력 저장 paymentId={} type={}", paymentId, type)
     }
 }

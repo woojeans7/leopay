@@ -8,9 +8,11 @@ import com.leopay.bookingapi.service.PaymentService
 import com.leopay.core.enums.PaymentMethod
 import com.leopay.core.enums.PaymentStatus
 import com.leopay.storage.entity.PaymentEntity
+import com.leopay.storage.repository.NotificationRepository
 import com.leopay.storage.repository.OutboxEventRepository
 import com.leopay.storage.repository.PaymentHistoryRepository
 import com.leopay.storage.repository.PaymentRepository
+import com.leopay.storage.repository.SettlementDetailRepository
 import com.ninjasquad.springmockk.MockkBean
 import io.mockk.coEvery
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -55,6 +57,12 @@ class IdempotencyRetryTest {
     private lateinit var outboxEventRepository: OutboxEventRepository
 
     @Autowired
+    private lateinit var settlementDetailRepository: SettlementDetailRepository
+
+    @Autowired
+    private lateinit var notificationRepository: NotificationRepository
+
+    @Autowired
     private lateinit var txManager: PlatformTransactionManager
 
     @Autowired
@@ -69,6 +77,8 @@ class IdempotencyRetryTest {
     @BeforeEach
     fun setUp() {
         redissonClient.keys.deleteByPattern("idempotency:*")
+        settlementDetailRepository.deleteAll()
+        notificationRepository.deleteAll()
         paymentHistoryRepository.deleteAll()
         outboxEventRepository.deleteAll()
         paymentRepository.deleteAll()

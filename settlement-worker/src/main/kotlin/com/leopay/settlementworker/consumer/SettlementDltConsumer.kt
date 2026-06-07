@@ -5,6 +5,7 @@ import com.leopay.settlementworker.dto.PaymentEvent
 import com.leopay.settlementworker.service.SettlementDetailService
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.slf4j.LoggerFactory
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.stereotype.Component
 
@@ -51,7 +52,12 @@ class SettlementDltConsumer(
         // A-4: DLT 수신 시 settlement_detail 에 PENDING 으로 재적재
         // 정상 컨슈머에서 실패한 메시지도 배치가 집계할 수 있도록 보장
         if (event != null) {
-            settlementDetailService.saveSettlementDetail(event.paymentId, source = "dlt")
+            try {
+                settlementDetailService.saveSettlementDetail(event.paymentId, source = "dlt")
+            } catch (e: DataIntegrityViolationException) {
+                // 이미 적재된 paymentId (unique constraint) → idempotency skip
+                log.warn("[idempotency] 중복 DLT skip paymentId={}", event.paymentId)
+            }
         } else {
             log.error("[dlt] 이벤트 파싱 실패로 재적재 불가 — 수동 처리 필요 value={}", record.value())
         }

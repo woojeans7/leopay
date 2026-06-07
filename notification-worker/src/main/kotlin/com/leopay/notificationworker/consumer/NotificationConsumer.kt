@@ -1,13 +1,11 @@
 package com.leopay.notificationworker.consumer
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.leopay.core.enums.NotificationStatus
-import com.leopay.core.enums.NotificationType
 import com.leopay.notificationworker.dto.PaymentEvent
 import com.leopay.notificationworker.service.NotificationService
-import com.leopay.storage.repository.NotificationRepository
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.slf4j.LoggerFactory
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.stereotype.Component
 
@@ -28,14 +26,13 @@ import org.springframework.stereotype.Component
  *   문제: 컨슈머 재시작, 리밸런싱, 네트워크 이슈 등으로 같은 메시지가 2회 이상 수신될 수 있음
  *        → 알림 중복 발송, notification 레코드 중복 생성
  *
- *   해결: paymentId + NotificationType 조합을 멱등성 키로 사용
- *        처리 전 DB 에서 SENT 레코드 존재 여부 확인 → 존재하면 skip
- *        DB unique constraint (payment_id, type) 가 최종 방어선 역할
+ *   해결: check+save 를 동일 트랜잭션(service) 에서 처리하여 TOCTOU 제거
+ *        DB unique constraint 위반(DataIntegrityViolationException) 은 consumer 레벨에서 catch
+ *        → 정상 idempotency skip 으로 처리, DLT 미발동
  */
 @Component
 class NotificationConsumer(
     private val notificationService: NotificationService,
-    private val notificationRepository: NotificationRepository,
     private val objectMapper: ObjectMapper,
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -43,34 +40,26 @@ class NotificationConsumer(
     @KafkaListener(topics = ["payment.approved"])
     fun onPaymentApproved(record: ConsumerRecord<String, String>) {
         val event = objectMapper.readValue(record.value(), PaymentEvent::class.java)
-
-        // B-3: SENT 레코드가 이미 있으면 동일 이벤트를 정상 처리한 것이므로 skip
-        if (notificationRepository.existsByPaymentIdAndTypeAndStatus(
-                event.paymentId, NotificationType.PAYMENT_COMPLETED, NotificationStatus.SENT
-            )
-        ) {
-            log.warn("[idempotency] 중복 메시지 skip paymentId={} type=PAYMENT_COMPLETED", event.paymentId)
-            return
-        }
-
         log.info("[notification] payment.approved paymentId={}", event.paymentId)
-        notificationService.sendApprovedNotification(event.paymentId)
+        try {
+            notificationService.sendApprovedNotification(event.paymentId)
+        } catch (e: DataIntegrityViolationException) {
+            // 동시 중복 소비 — unique constraint 위반은 정상 idempotency skip
+            // 트랜잭션 경계 바깥에서 catch → DLT 미발동
+            log.warn("[idempotency] 중복 소비 skip paymentId={}", event.paymentId)
+        }
     }
 
     @KafkaListener(topics = ["payment.canceled"])
     fun onPaymentCanceled(record: ConsumerRecord<String, String>) {
         val event = objectMapper.readValue(record.value(), PaymentEvent::class.java)
-
-        // B-3: SENT 레코드가 이미 있으면 동일 이벤트를 정상 처리한 것이므로 skip
-        if (notificationRepository.existsByPaymentIdAndTypeAndStatus(
-                event.paymentId, NotificationType.PAYMENT_CANCELED, NotificationStatus.SENT
-            )
-        ) {
-            log.warn("[idempotency] 중복 메시지 skip paymentId={} type=PAYMENT_CANCELED", event.paymentId)
-            return
-        }
-
         log.info("[notification] payment.canceled paymentId={}", event.paymentId)
-        notificationService.sendCanceledNotification(event.paymentId)
+        try {
+            notificationService.sendCanceledNotification(event.paymentId)
+        } catch (e: DataIntegrityViolationException) {
+            // 동시 중복 소비 — unique constraint 위반은 정상 idempotency skip
+            // 트랜잭션 경계 바깥에서 catch → DLT 미발동
+            log.warn("[idempotency] 중복 소비 skip paymentId={}", event.paymentId)
+        }
     }
 }
