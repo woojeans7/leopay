@@ -8,6 +8,7 @@ import java.time.LocalDate
  * B-5: 모든 금액 필드는 BigDecimal 타입 사용 (부동소수점 오차 방지)
  */
 data class SettlementItemDto(
+    val settlementDetailId: Long,   // Writer에서 settlement_detail.settlement_id, status 업데이트 시 사용
     val paymentId: Long,
     val merchantId: Long,
     val feeRate: BigDecimal,

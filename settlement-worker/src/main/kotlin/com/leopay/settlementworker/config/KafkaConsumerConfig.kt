@@ -16,17 +16,19 @@ import org.springframework.util.backoff.FixedBackOff
  * A-4 2단계(해결): Kafka 컨슈머 에러 핸들러 + DLT 설정
  *
  * 문제(1단계): 에러 핸들러 미설정 → 기본 9회 재시도 후 offset commit → 메시지 영구 유실
- *             PaymentSettlementConsumer 는 에러 핸들러 없이 동작하여 실패 시 정산 누락 재현용
+ *             테스트에서 @TestConfiguration 으로 에러 핸들러 없는 팩토리를 override 하여 재현
+ *             (SettlementMessageLossTest.FastErrorHandlerConfig 패턴)
  *
  * 해결:
  *   - FixedBackOff(1000L, 3L): 1초 간격 최대 3회 재시도 (총 4회 처리 시도)
  *   - DeadLetterPublishingRecoverer: 3회 재시도 소진 시 payment.approved.DLT 로 이동
- *     → SettlementDltConsumer 가 WARN 로그 기록, 수동 재처리 가능
+ *     → SettlementDltConsumer 가 settlement_detail 재적재 후 배치 집계 가능
  *   - 실패 메시지가 DLT 에 보존되므로 정산 유실 0건 달성
  *
- * 주의: PaymentSettlementConsumer 는 이 ErrorHandler 를 사용하지 않는다.
- *       kafkaListenerContainerFactory 를 명시하지 않은 리스너는 Spring Boot 자동 구성
- *       기본 컨테이너 팩토리를 사용한다 — A-4 1단계(문제 재현) 목적.
+ * 팩토리 역할 분리:
+ *   - settlementListenerContainerFactory: 에러 핸들러 포함 → PaymentSettlementConsumer 전용
+ *   - settlementDltListenerContainerFactory: 단순 팩토리 (에러 핸들러 없음) → SettlementDltConsumer 전용
+ *     DLT Consumer 자체에 에러 핸들러를 달면 실패 시 또 DLT 로 보내는 순환 구조가 되므로 제거
  */
 @Configuration
 class KafkaConsumerConfig {
@@ -76,16 +78,33 @@ class KafkaConsumerConfig {
     }
 
     /**
-     * DLT 전용 컨테이너 팩토리 — SettlementDltConsumer 에서 containerFactory 로 명시
+     * 원본 컨슈머 전용 컨테이너 팩토리 — PaymentSettlementConsumer 에서 containerFactory 로 명시
+     *
+     * 에러 핸들러 포함: 3회 재시도 후 payment.approved.DLT 로 이동
      */
     @Bean
-    fun settlementDltListenerContainerFactory(
+    fun settlementListenerContainerFactory(
         consumerFactory: ConsumerFactory<String, String>,
         errorHandler: DefaultErrorHandler,
     ): ConcurrentKafkaListenerContainerFactory<String, String> {
         val factory = ConcurrentKafkaListenerContainerFactory<String, String>()
         factory.consumerFactory = consumerFactory
         factory.setCommonErrorHandler(errorHandler)
+        return factory
+    }
+
+    /**
+     * DLT 전용 컨테이너 팩토리 — SettlementDltConsumer 에서 containerFactory 로 명시
+     *
+     * 에러 핸들러 없음: DLT Consumer 실패 시 재처리 로직은 수동 운영 대응
+     * (DLT Consumer 에 에러 핸들러를 달면 실패 시 또 DLT 로 이동하는 순환 구조가 됨)
+     */
+    @Bean
+    fun settlementDltListenerContainerFactory(
+        consumerFactory: ConsumerFactory<String, String>,
+    ): ConcurrentKafkaListenerContainerFactory<String, String> {
+        val factory = ConcurrentKafkaListenerContainerFactory<String, String>()
+        factory.consumerFactory = consumerFactory
         return factory
     }
 }

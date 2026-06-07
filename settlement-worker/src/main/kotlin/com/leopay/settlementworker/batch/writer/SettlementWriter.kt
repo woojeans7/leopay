@@ -2,7 +2,6 @@ package com.leopay.settlementworker.batch.writer
 
 import com.leopay.core.enums.SettlementStatus
 import com.leopay.settlementworker.batch.dto.SettlementItemDto
-import com.leopay.storage.entity.SettlementDetailEntity
 import com.leopay.storage.entity.SettlementEntity
 import com.leopay.storage.repository.SettlementDetailRepository
 import com.leopay.storage.repository.SettlementRepository
@@ -19,15 +18,17 @@ import java.math.BigDecimal
  * 1. SettlementEntity upsert: merchantId + settlementDate unique 제약 활용
  *    - 이미 존재하면 totalCount/totalAmount/feeAmount/settlementAmount 누적
  *    - 없으면 신규 생성 (status = PENDING)
- * 2. SettlementDetailEntity bulk insert: 각 paymentId 별로 상세 내역 저장
+ * 2. Consumer가 선적재한 SettlementDetailEntity 업데이트:
+ *    - settlementId = savedSettlement.id (배치 집계 완료 후 연결)
+ *    - status = COMPLETED (PENDING → COMPLETED)
  *
  * B-4: 청크 단위 트랜잭션 보장
  *   - SettlementJobConfig의 chunk() 설정에 의해 이 Writer 호출 전체가 하나의 트랜잭션으로 묶임.
  *   - Writer 내 예외 발생 시 해당 청크 전체가 롤백되며, Skip 정책에 따라 재처리됨.
  *
  * B-3: 중복 집계 방지
- *   - SettlementDetailEntity의 paymentId 중복 삽입은 DB unique 제약(settlement_detail.payment_id)으로 차단 가능.
- *   - 단, settlement_detail 테이블에 payment_id unique 제약이 없는 경우 existsBySettlementIdAndPaymentId 확인으로 보완.
+ *   - Reader가 status = PENDING 건만 읽으므로 이미 COMPLETED로 업데이트된 건은 재집계되지 않음.
+ *   - 배치 재시작 시에도 PENDING 건만 대상이 되므로 중복 집계 자동 방지.
  */
 @Component
 class SettlementWriter(
@@ -85,26 +86,22 @@ class SettlementWriter(
             savedSettlement.id, savedSettlement.merchantId, accumulatedCount, accumulatedTotal
         )
 
-        // 2. SettlementDetailEntity bulk insert
-        // B-3: 이미 처리된 paymentId에 대한 중복 삽입을 방지하기 위해 기존 상세 내역 paymentId를 조회
-        val existingPaymentIds = savedSettlement.id?.let { sid ->
-            settlementDetailRepository.findBySettlementId(sid).map { it.paymentId }.toSet()
-        } ?: emptySet()
+        // 2. Consumer가 선적재한 settlement_detail 업데이트
+        //    settlementId 연결 + status PENDING → COMPLETED
+        // B-3: Reader가 PENDING 건만 읽으므로 이미 COMPLETED인 건은 여기 도달하지 않음 — 중복 집계 자동 방지
+        val detailIds = chunk.items.map { it.settlementDetailId }
+        val details = settlementDetailRepository.findAllById(detailIds)
 
-        val details = chunk.items
-            .filter { it.paymentId !in existingPaymentIds }
-            .map { item ->
-                SettlementDetailEntity(
-                    settlementId = savedSettlement.id!!,
-                    paymentId = item.paymentId,
-                    amount = item.amount,
-                    feeAmount = item.feeAmount,
-                )
-            }
-
-        if (details.isNotEmpty()) {
-            settlementDetailRepository.saveAll(details)
-            log.debug("정산 상세 {}건 저장: settlementId={}", details.size, savedSettlement.id)
+        for (detail in details) {
+            detail.settlementId = savedSettlement.id
+            detail.status = SettlementStatus.COMPLETED
         }
+
+        settlementDetailRepository.saveAll(details)
+
+        log.debug(
+            "정산 상세 {}건 업데이트 (PENDING→COMPLETED): settlementId={}",
+            details.size, savedSettlement.id
+        )
     }
 }

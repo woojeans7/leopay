@@ -96,18 +96,23 @@ CREATE TABLE IF NOT EXISTS settlement (
 ) DEFAULT CHARACTER SET utf8mb4;
 
 -- ── SETTLEMENT_DETAIL (정산 상세) ──────────────────────────
+-- Consumer가 먼저 선적재(PENDING)하고, 배치가 집계 후 settlement_id를 연결하는 구조
 CREATE TABLE IF NOT EXISTS settlement_detail (
-    id            BIGINT        NOT NULL AUTO_INCREMENT,
-    settlement_id BIGINT        NOT NULL COMMENT '정산 ID',
-    payment_id    BIGINT        NOT NULL COMMENT '결제 ID',
-    amount        DECIMAL(12,0) NOT NULL COMMENT '결제 금액 스냅샷',
-    fee_amount    DECIMAL(15,4) NOT NULL COMMENT '수수료 스냅샷',
-    created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id              BIGINT        NOT NULL AUTO_INCREMENT,
+    settlement_id   BIGINT        NULL     COMMENT '정산 ID (배치 완료 후 연결)',
+    payment_id      BIGINT        NOT NULL COMMENT '결제 ID',
+    merchant_id     BIGINT        NOT NULL COMMENT '가맹점 ID',
+    settlement_date DATE          NOT NULL COMMENT '정산 기준일 (결제 승인일)',
+    amount          DECIMAL(12,0) NOT NULL COMMENT '결제 금액 스냅샷',
+    fee_amount      DECIMAL(15,4) NOT NULL COMMENT '수수료 스냅샷',
+    status          VARCHAR(20)   NOT NULL DEFAULT 'PENDING' COMMENT '처리 상태',
+    created_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
-    CONSTRAINT fk_detail_settlement FOREIGN KEY (settlement_id) REFERENCES settlement (id),
-    CONSTRAINT fk_detail_payment    FOREIGN KEY (payment_id)    REFERENCES payment (id),
-    INDEX idx_detail_settlement (settlement_id),
-    INDEX idx_detail_payment    (payment_id)
+    CONSTRAINT fk_detail_payment FOREIGN KEY (payment_id) REFERENCES payment (id),
+    INDEX idx_detail_settlement           (settlement_id),
+    INDEX idx_detail_payment              (payment_id),
+    INDEX idx_detail_merchant_date        (merchant_id, settlement_date),
+    INDEX idx_detail_merchant_date_status (merchant_id, settlement_date, status)
 ) DEFAULT CHARACTER SET utf8mb4;
 
 -- ── OUTBOX_EVENT (아웃박스 이벤트) ────────────────────────

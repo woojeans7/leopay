@@ -26,6 +26,8 @@ spring:
   batch:
     job:
       enabled: false  # 자동 실행 비활성화 (Week 4에서 스케줄 설정)
+    jdbc:
+      initialize-schema: always  # Batch 메타 테이블 자동 생성
 
 settlement:
   batch:

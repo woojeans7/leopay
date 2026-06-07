@@ -4,7 +4,7 @@ import com.leopay.settlementworker.batch.dto.SettlementItemDto
 import com.leopay.settlementworker.batch.processor.SettlementProcessor
 import com.leopay.settlementworker.batch.reader.PaymentPageReader
 import com.leopay.settlementworker.batch.writer.SettlementWriter
-import com.leopay.storage.entity.PaymentEntity
+import com.leopay.storage.entity.SettlementDetailEntity
 import org.slf4j.LoggerFactory
 import org.springframework.batch.core.Job
 import org.springframework.batch.core.Step
@@ -61,7 +61,7 @@ class SettlementJobConfig(
         // JobParameters에서 merchantId, settlementDate를 꺼내 Reader를 초기화
         // 실제 파라미터 값은 Job 실행 시점에 바인딩됨 — StepExecutionContext를 통해 전달
         return StepBuilder("settlementStep", jobRepository)
-            .chunk<PaymentEntity, SettlementItemDto>(chunkSize, transactionManager)
+            .chunk<SettlementDetailEntity, SettlementItemDto>(chunkSize, transactionManager)
             // Reader: 지연 초기화 — Step 실행 시 JobParameters 바인딩 후 생성
             .reader(
                 // PaymentPageReader.create()는 StepScope 내에서 호출해야 JobParameters에 접근 가능.
@@ -111,7 +111,7 @@ class SettlementJobConfig(
     fun stepScopedReader(
         @Value("#{jobParameters['merchantId']}") merchantId: Long? = null,
         @Value("#{jobParameters['settlementDate']}") settlementDate: String? = null,
-    ): org.springframework.batch.item.database.JpaPagingItemReader<PaymentEntity> {
+    ): org.springframework.batch.item.database.JpaPagingItemReader<SettlementDetailEntity> {
         requireNotNull(merchantId) { "JobParameter 'merchantId' 가 없습니다." }
         requireNotNull(settlementDate) { "JobParameter 'settlementDate' 가 없습니다." }
         log.info("PaymentPageReader 초기화: merchantId={}, settlementDate={}, chunkSize={}", merchantId, settlementDate, chunkSize)
