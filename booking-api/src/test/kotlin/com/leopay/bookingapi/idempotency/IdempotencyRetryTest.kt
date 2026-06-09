@@ -15,9 +15,11 @@ import com.leopay.storage.repository.PaymentRepository
 import com.leopay.storage.repository.SettlementDetailRepository
 import com.ninjasquad.springmockk.MockkBean
 import io.mockk.coEvery
+import com.leopay.bookingapi.exception.PaymentException
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 import org.redisson.api.RedissonClient
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.autoconfigure.EnableAutoConfiguration
@@ -34,8 +36,10 @@ import java.time.LocalDateTime
  *
  * 문제(수정 전): 네트워크 유실 후 재시도 시 DuplicatePayment(409) / InvalidStatus(422) 반환
  *              → 클라이언트가 실패로 오판 → 재결제 → 이중과금 위험
- * 해결(수정 후): paymentKey / paymentId를 멱등성 키로 Redis 캐싱
- *              → 재시도 시 첫 응답을 그대로 반환 → 클라이언트가 성공 여부를 정확히 파악
+ * 해결(수정 후):
+ *   - createPayment: paymentKey를 멱등성 키로 Redis 캐싱 → 재시도 시 첫 응답 그대로 반환
+ *   - approvePayment: Idempotency-Key 헤더 기반 캐싱 제거, 상태 머신이 중복 승인을 차단
+ *                    (APPROVED 상태에서 재시도 시 InvalidStatus 예외 발생)
  *
  * develop test: 로컬 MySQL(localhost:3306) + Redis(localhost:6379) 실제 연결 필요
  */
@@ -111,13 +115,14 @@ class IdempotencyRetryTest {
     }
 
     /**
-     * approvePayment 재시도 — 멱등성 적용 후 검증:
-     * 동일 paymentId로 재시도하면 1차 요청과 동일한 응답을 반환하고 APPROVED 이력은 1건만 존재한다.
+     * approvePayment 재시도 — 상태 머신이 중복 승인을 차단하는 검증:
+     * 이미 APPROVED 상태인 결제에 다시 approvePayment를 호출하면 InvalidStatus 예외가 발생한다.
+     * Idempotency-Key 캐싱 대신 상태 머신이 중복 승인 방어선 역할을 담당한다.
      */
     @Test
-    fun `approvePayment 재시도 - 멱등성 적용 후 동일 응답 반환`() {
+    fun `approvePayment 재시도 - 상태 머신이 중복 승인을 차단한다`() {
+        // APPROVED 상태 결제 직접 세팅
         val txTemplate = TransactionTemplate(txManager)
-
         val paymentId = txTemplate.execute {
             paymentRepository.save(
                 PaymentEntity(
@@ -126,20 +131,13 @@ class IdempotencyRetryTest {
                     userId = "user-1",
                     amount = BigDecimal("50000"),
                     method = PaymentMethod.CARD,
-                    status = PaymentStatus.READY,
+                    status = PaymentStatus.APPROVED,  // 이미 APPROVED
                 )
             ).id!!
         }!!
 
-        val firstResponse = paymentService.approvePayment(paymentId)
-        val retryResponse = paymentService.approvePayment(paymentId)
-
-        assertEquals(PaymentStatus.APPROVED, retryResponse.status, "재시도 응답은 APPROVED여야 한다")
-        assertEquals(firstResponse.pgTransactionId, retryResponse.pgTransactionId, "재시도 응답의 pgTransactionId는 1차 응답과 동일해야 한다")
-        assertEquals(
-            1,
-            paymentHistoryRepository.findByPaymentIdAndNewStatus(paymentId, PaymentStatus.APPROVED).size,
-            "APPROVED 이력은 1건만 존재해야 한다"
-        )
+        assertThrows<PaymentException.InvalidStatus> {
+            paymentService.approvePayment(paymentId)
+        }
     }
 }

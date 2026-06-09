@@ -8,7 +8,6 @@ import com.leopay.bookingapi.exception.PaymentException
 import com.leopay.bookingapi.gateway.PaymentGateway
 import com.leopay.bookingapi.gateway.dto.PgApproveRequest
 import com.leopay.bookingapi.gateway.dto.PgCancelRequest
-import com.leopay.bookingapi.idempotency.IdempotencyManager
 import com.leopay.bookingapi.lock.LockManager
 import com.leopay.core.enums.PaymentStatus
 import com.leopay.storage.entity.OutboxEventEntity
@@ -31,7 +30,6 @@ class PaymentService(
     private val outboxEventRepository: OutboxEventRepository,
     private val paymentHistoryRepository: PaymentHistoryRepository,
     private val lockManager: LockManager,
-    private val idempotencyManager: IdempotencyManager,
     private val gateway: PaymentGateway,
     txManager: PlatformTransactionManager,
 ) {
@@ -44,13 +42,15 @@ class PaymentService(
     private val txTemplate = TransactionTemplate(txManager)
 
     /**
-     * A-2: paymentKey를 멱등성 키로 사용한다.
-     * 동일 paymentKey로 재시도가 오면 Redis 캐시에서 기존 응답을 반환하여 DuplicatePayment 오류를 방지한다.
-     * (클라이언트가 응답을 못 받고 재시도하는 시나리오)
+     * NOT_SUPPORTED: AOP 프록시가 기존 트랜잭션을 중단(suspend)한다.
+     * withLock 블록 내에서 txTemplate.execute()가 새 트랜잭션을 시작하므로
+     * "락 획득 → TX 시작 → DB 저장 → TX 커밋 → 락 해제" 순서가 보장된다.
+     * 락 해제 전에 커밋이 완료되므로 다른 요청이 진입해도 existsByPaymentKey가 true를 반환한다. (A-1)
      */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun createPayment(userId: String, request: PaymentCreateRequest): PaymentCreateResponse {
-        return idempotencyManager.execute("createPayment", request.paymentKey, PaymentCreateResponse::class.java) {
-            lockManager.withLock(request.paymentKey) {
+        return lockManager.withLock(request.paymentKey) {
+            txTemplate.execute {
                 if (paymentRepository.existsByPaymentKey(request.paymentKey)) {
                     throw PaymentException.DuplicatePayment(request.paymentKey)
                 }
@@ -80,7 +80,7 @@ class PaymentService(
                     paymentKey = payment.paymentKey,
                     status = payment.status,
                 )
-            }
+            }!!
         }
     }
 
@@ -88,160 +88,149 @@ class PaymentService(
      * NOT_SUPPORTED: AOP 프록시가 기존 트랜잭션을 중단(suspend)한다.
      * withLock 블록 내에서 txTemplate.execute()가 새 트랜잭션을 시작하므로
      * 락 획득 시점에 항상 최신 커밋 상태를 읽을 수 있다.
-     *
-     * A-2: paymentId를 멱등성 키로 사용한다.
-     * PG 출금 완료 후 응답 유실로 클라이언트가 재시도하면 InvalidStatus 오류가 발생하는 문제를 방지한다.
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun approvePayment(paymentId: Long): PaymentResponse {
-        return idempotencyManager.execute("approvePayment", paymentId.toString(), PaymentResponse::class.java) {
-            lockManager.withLock("lock:approve", paymentId.toString()) {
-                txTemplate.execute {
-                    val payment = paymentRepository.findById(paymentId)
-                        .orElseThrow { PaymentException.NotFound(paymentId) }
+        return lockManager.withLock("lock:approve", paymentId.toString()) {
+            txTemplate.execute {
+                val payment = paymentRepository.findById(paymentId)
+                    .orElseThrow { PaymentException.NotFound(paymentId) }
 
-                    val previousStatus = payment.status
-                    try {
-                        payment.transitionTo(PaymentStatus.IN_PROGRESS)
-                    } catch (e: IllegalArgumentException) {
-                        throw PaymentException.InvalidStatus(previousStatus, PaymentStatus.IN_PROGRESS)
-                    }
+                val previousStatus = payment.status
+                try {
+                    payment.transitionTo(PaymentStatus.IN_PROGRESS)
+                } catch (_: IllegalArgumentException) {
+                    throw PaymentException.InvalidStatus(previousStatus, PaymentStatus.IN_PROGRESS)
+                }
 
-                    val pgRequest = PgApproveRequest(
-                        paymentKey = payment.paymentKey,
-                        amount = payment.amount,
-                        method = payment.method.name,
+                val pgRequest = PgApproveRequest(
+                    paymentKey = payment.paymentKey,
+                    amount = payment.amount,
+                    method = payment.method.name,
+                )
+
+                try {
+                    val pgResponse = runBlocking { gateway.approve(pgRequest) }
+
+                    payment.transitionTo(PaymentStatus.APPROVED)
+                    payment.pgTransactionId = pgResponse.pgTransactionId
+                    payment.approvedAt = pgResponse.approvedAt
+
+                    paymentHistoryRepository.save(
+                        PaymentHistoryEntity(
+                            paymentId = payment.id!!,
+                            previousStatus = PaymentStatus.IN_PROGRESS,
+                            newStatus = PaymentStatus.APPROVED,
+                        )
                     )
 
-                    try {
-                        val pgResponse = runBlocking { gateway.approve(pgRequest) }
-
-                        payment.transitionTo(PaymentStatus.APPROVED)
-                        payment.pgTransactionId = pgResponse.pgTransactionId
-                        payment.approvedAt = pgResponse.approvedAt
-
-                        paymentHistoryRepository.save(
-                            PaymentHistoryEntity(
-                                paymentId = payment.id!!,
-                                previousStatus = PaymentStatus.IN_PROGRESS,
-                                newStatus = PaymentStatus.APPROVED,
-                            )
+                    outboxEventRepository.save(
+                        OutboxEventEntity(
+                            aggregateType = "PAYMENT",
+                            aggregateId = payment.id!!,
+                            eventType = "PAYMENT_APPROVED",
+                            payload = """{"paymentId":${payment.id}}""",
                         )
+                    )
+                } catch (e: PaymentException.PgCommunicationFailed) {
+                    payment.transitionTo(PaymentStatus.FAILED)
 
-                        outboxEventRepository.save(
-                            OutboxEventEntity(
-                                aggregateType = "PAYMENT",
-                                aggregateId = payment.id!!,
-                                eventType = "PAYMENT_APPROVED",
-                                payload = """{"paymentId":${payment.id}}""",
-                            )
+                    paymentHistoryRepository.save(
+                        PaymentHistoryEntity(
+                            paymentId = payment.id!!,
+                            previousStatus = PaymentStatus.IN_PROGRESS,
+                            newStatus = PaymentStatus.FAILED,
+                            reason = e.message,
                         )
-                    } catch (e: PaymentException.PgCommunicationFailed) {
-                        payment.transitionTo(PaymentStatus.FAILED)
+                    )
 
-                        paymentHistoryRepository.save(
-                            PaymentHistoryEntity(
-                                paymentId = payment.id!!,
-                                previousStatus = PaymentStatus.IN_PROGRESS,
-                                newStatus = PaymentStatus.FAILED,
-                                reason = e.message,
-                            )
+                    outboxEventRepository.save(
+                        OutboxEventEntity(
+                            aggregateType = "PAYMENT",
+                            aggregateId = payment.id!!,
+                            eventType = "PAYMENT_FAILED",
+                            payload = """{"paymentId":${payment.id}}""",
                         )
+                    )
 
-                        outboxEventRepository.save(
-                            OutboxEventEntity(
-                                aggregateType = "PAYMENT",
-                                aggregateId = payment.id!!,
-                                eventType = "PAYMENT_FAILED",
-                                payload = """{"paymentId":${payment.id}}""",
-                            )
-                        )
+                    throw e
+                }
 
-                        throw e
-                    }
-
-                    PaymentResponse.from(payment)
-                }!!
-            }
+                PaymentResponse.from(payment)
+            }!!
         }
     }
 
-    /**
-     * A-2: paymentId를 멱등성 키로 사용한다.
-     * 취소 완료 후 응답 유실로 클라이언트가 재시도하면 InvalidStatus 오류가 발생하는 문제를 방지한다.
-     */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun cancelPayment(paymentId: Long, request: CancelRequest): PaymentResponse {
-        return idempotencyManager.execute("cancelPayment", paymentId.toString(), PaymentResponse::class.java) {
-            lockManager.withLock("lock:cancel", paymentId.toString()) {
-                txTemplate.execute {
-                    val payment = paymentRepository.findById(paymentId)
-                        .orElseThrow { PaymentException.NotFound(paymentId) }
+        return lockManager.withLock("lock:cancel", paymentId.toString()) {
+            txTemplate.execute {
+                val payment = paymentRepository.findById(paymentId)
+                    .orElseThrow { PaymentException.NotFound(paymentId) }
 
-                    val previousStatus = payment.status
-                    try {
-                        payment.transitionTo(PaymentStatus.CANCEL_IN_PROGRESS)
-                    } catch (e: IllegalArgumentException) {
-                        throw PaymentException.InvalidStatus(previousStatus, PaymentStatus.CANCEL_IN_PROGRESS)
-                    }
+                val previousStatus = payment.status
+                try {
+                    payment.transitionTo(PaymentStatus.CANCEL_IN_PROGRESS)
+                } catch (_: IllegalArgumentException) {
+                    throw PaymentException.InvalidStatus(previousStatus, PaymentStatus.CANCEL_IN_PROGRESS)
+                }
 
-                    payment.cancelReason = request.cancelReason
+                payment.cancelReason = request.cancelReason
 
-                    val pgRequest = PgCancelRequest(
-                        pgTransactionId = payment.pgTransactionId ?: "",
-                        cancelReason = request.cancelReason,
+                val pgRequest = PgCancelRequest(
+                    pgTransactionId = payment.pgTransactionId ?: "",
+                    cancelReason = request.cancelReason,
+                )
+
+                try {
+                    val pgResponse = runBlocking { gateway.cancel(pgRequest) }
+
+                    payment.transitionTo(PaymentStatus.CANCELED)
+                    payment.canceledAt = pgResponse.canceledAt
+
+                    paymentHistoryRepository.save(
+                        PaymentHistoryEntity(
+                            paymentId = payment.id!!,
+                            previousStatus = PaymentStatus.CANCEL_IN_PROGRESS,
+                            newStatus = PaymentStatus.CANCELED,
+                            reason = request.cancelReason,
+                        )
                     )
 
-                    try {
-                        val pgResponse = runBlocking { gateway.cancel(pgRequest) }
-
-                        payment.transitionTo(PaymentStatus.CANCELED)
-                        payment.canceledAt = pgResponse.canceledAt
-
-                        paymentHistoryRepository.save(
-                            PaymentHistoryEntity(
-                                paymentId = payment.id!!,
-                                previousStatus = PaymentStatus.CANCEL_IN_PROGRESS,
-                                newStatus = PaymentStatus.CANCELED,
-                                reason = request.cancelReason,
-                            )
+                    outboxEventRepository.save(
+                        OutboxEventEntity(
+                            aggregateType = "PAYMENT",
+                            aggregateId = payment.id!!,
+                            eventType = "PAYMENT_CANCELED",
+                            payload = """{"paymentId":${payment.id}}""",
                         )
+                    )
+                } catch (e: PaymentException.PgCommunicationFailed) {
+                    payment.transitionTo(PaymentStatus.CANCEL_FAILED)
 
-                        outboxEventRepository.save(
-                            OutboxEventEntity(
-                                aggregateType = "PAYMENT",
-                                aggregateId = payment.id!!,
-                                eventType = "PAYMENT_CANCELED",
-                                payload = """{"paymentId":${payment.id}}""",
-                            )
+                    paymentHistoryRepository.save(
+                        PaymentHistoryEntity(
+                            paymentId = payment.id!!,
+                            previousStatus = PaymentStatus.CANCEL_IN_PROGRESS,
+                            newStatus = PaymentStatus.CANCEL_FAILED,
+                            reason = e.message,
                         )
-                    } catch (e: PaymentException.PgCommunicationFailed) {
-                        payment.transitionTo(PaymentStatus.CANCEL_FAILED)
+                    )
 
-                        paymentHistoryRepository.save(
-                            PaymentHistoryEntity(
-                                paymentId = payment.id!!,
-                                previousStatus = PaymentStatus.CANCEL_IN_PROGRESS,
-                                newStatus = PaymentStatus.CANCEL_FAILED,
-                                reason = e.message,
-                            )
+                    outboxEventRepository.save(
+                        OutboxEventEntity(
+                            aggregateType = "PAYMENT",
+                            aggregateId = payment.id!!,
+                            eventType = "PAYMENT_CANCEL_FAILED",
+                            payload = """{"paymentId":${payment.id}}""",
                         )
+                    )
 
-                        outboxEventRepository.save(
-                            OutboxEventEntity(
-                                aggregateType = "PAYMENT",
-                                aggregateId = payment.id!!,
-                                eventType = "PAYMENT_CANCEL_FAILED",
-                                payload = """{"paymentId":${payment.id}}""",
-                            )
-                        )
+                    throw e
+                }
 
-                        throw e
-                    }
-
-                    PaymentResponse.from(payment)
-                }!!
-            }
+                PaymentResponse.from(payment)
+            }!!
         }
     }
 

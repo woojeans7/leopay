@@ -136,13 +136,14 @@ class ApprovePaymentConcurrencyTest {
         }
 
         // 기본값: 실제 멱등성 처리 위임 (락 있는 테스트용. 락 없는 테스트는 내부에서 no-op으로 override)
-        every { idempotencyManager.execute(any(), any(), any<Class<Any>>(), any<() -> Any>()) } answers {
-            val apiName = firstArg<String>()
-            val idempotencyKey = secondArg<String>()
+        every { idempotencyManager.execute(any(), any(), any(), any<Class<Any>>(), any<() -> Any>()) } answers {
+            val userId = firstArg<String>()
+            val apiName = secondArg<String>()
+            val idempotencyKey = thirdArg<String>()
             @Suppress("UNCHECKED_CAST")
-            val responseClass = thirdArg<Class<Any>>()
+            val responseClass = arg<Class<Any>>(3)
             val block = lastArg<() -> Any>()
-            realIdempotencyManager.execute(apiName, idempotencyKey, responseClass, block)
+            realIdempotencyManager.execute(userId, apiName, idempotencyKey, responseClass, block)
         }
     }
 
@@ -167,7 +168,7 @@ class ApprovePaymentConcurrencyTest {
             block()
         }
         // IdempotencyManager no-op: 멱등성 체크 없이 즉시 블록 실행
-        every { idempotencyManager.execute(any(), any(), any<Class<Any>>(), any<() -> Any>()) } answers {
+        every { idempotencyManager.execute(any(), any(), any(), any<Class<Any>>(), any<() -> Any>()) } answers {
             val block = lastArg<() -> Any>()
             block()
         }

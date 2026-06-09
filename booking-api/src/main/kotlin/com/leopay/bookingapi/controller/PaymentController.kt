@@ -27,14 +27,10 @@ class PaymentController(
     @PostMapping
     fun createPayment(
         @RequestHeader("X-User-Id") userId: String,
-        @RequestHeader("Idempotency-Key", required = false) idempotencyKey: String?,
+        @RequestHeader("Idempotency-Key") idempotencyKey: String,
         @RequestBody @Valid request: PaymentCreateRequest,
     ): ResponseEntity<PaymentCreateResponse> {
-        val response = if (idempotencyKey != null) {
-            idempotencyManager.execute("createPayment", idempotencyKey, PaymentCreateResponse::class.java) {
-                paymentService.createPayment(userId, request)
-            }
-        } else {
+        val response = idempotencyManager.execute(userId, "createPayment", idempotencyKey, PaymentCreateResponse::class.java) {
             paymentService.createPayment(userId, request)
         }
         return ResponseEntity.status(HttpStatus.CREATED).body(response)
@@ -43,31 +39,17 @@ class PaymentController(
     @PostMapping("/{id}/approve")
     fun approvePayment(
         @PathVariable id: Long,
-        @RequestHeader("Idempotency-Key", required = false) idempotencyKey: String?,
     ): ResponseEntity<PaymentResponse> {
-        val response = if (idempotencyKey != null) {
-            idempotencyManager.execute("approvePayment", idempotencyKey, PaymentResponse::class.java) {
-                paymentService.approvePayment(id)
-            }
-        } else {
-            paymentService.approvePayment(id)
-        }
+        val response = paymentService.approvePayment(id)
         return ResponseEntity.ok(response)
     }
 
     @PostMapping("/{id}/cancel")
     fun cancelPayment(
         @PathVariable id: Long,
-        @RequestHeader("Idempotency-Key", required = false) idempotencyKey: String?,
         @RequestBody @Valid request: CancelRequest,
     ): ResponseEntity<PaymentResponse> {
-        val response = if (idempotencyKey != null) {
-            idempotencyManager.execute("cancelPayment", idempotencyKey, PaymentResponse::class.java) {
-                paymentService.cancelPayment(id, request)
-            }
-        } else {
-            paymentService.cancelPayment(id, request)
-        }
+        val response = paymentService.cancelPayment(id, request)
         return ResponseEntity.ok(response)
     }
 

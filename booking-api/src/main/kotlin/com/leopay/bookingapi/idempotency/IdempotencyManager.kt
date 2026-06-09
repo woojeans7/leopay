@@ -15,7 +15,7 @@ import java.time.Duration
  *   1차 방어: Redis (TTL 24시간) — 재시도 중복 실행 차단
  *   2차 방어: DB unique constraint (payment_key) — Redis 장애·TTL 만료 후 최후 방어선
  *
- * 키 형식: idempotency:{apiName}:{idempotencyKey}
+ * 키 형식: idempotency:{userId}:{apiName}:{idempotencyKey}
  */
 @Component
 class IdempotencyManager(
@@ -31,19 +31,21 @@ class IdempotencyManager(
     /**
      * 멱등성 체크 후 서비스 로직을 실행한다.
      *
-     * @param apiName   API 이름 (예: "createPayment", "approvePayment", "cancelPayment")
+     * @param userId     X-User-Id 헤더 값 (키 충돌 방지를 위해 포함)
+     * @param apiName    API 이름 (예: "createPayment")
      * @param idempotencyKey  클라이언트가 전송한 Idempotency-Key 헤더 값
      * @param responseClass  응답 역직렬화에 사용할 클래스
-     * @param block     실제 서비스 로직
+     * @param block      실제 서비스 로직
      * @return 기존 응답(재시도) 또는 신규 응답(최초 요청)
      */
     fun <T : Any> execute(
+        userId: String,
         apiName: String,
         idempotencyKey: String,
         responseClass: Class<T>,
         block: () -> T,
     ): T {
-        val redisKey = "$KEY_PREFIX:$apiName:$idempotencyKey"
+        val redisKey = "$KEY_PREFIX:$userId:$apiName:$idempotencyKey"
         val bucket = redissonClient.getBucket<String>(redisKey)
 
         // 1차 방어: Redis에 저장된 응답이 있으면 그대로 반환
