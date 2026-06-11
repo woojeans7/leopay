@@ -49,7 +49,7 @@ class PaymentService(
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun createPayment(userId: String, request: PaymentCreateRequest): PaymentCreateResponse {
-        return lockManager.withLock(request.paymentKey) {
+        return lockManager.withLock("lock:payment", request.paymentKey) {
             txTemplate.execute {
                 if (paymentRepository.existsByPaymentKey(request.paymentKey)) {
                     throw PaymentException.DuplicatePayment(request.paymentKey)

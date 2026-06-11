@@ -129,12 +129,6 @@ class ApprovePaymentConcurrencyTest {
             val block = thirdArg<() -> Any>()
             realLockManager.withLock(prefix, key, block)
         }
-        every { lockManager.withLock(any<String>(), any<() -> Any>()) } answers {
-            val paymentKey = firstArg<String>()
-            val block = secondArg<() -> Any>()
-            realLockManager.withLock(paymentKey, block)
-        }
-
         // 기본값: 실제 멱등성 처리 위임 (락 있는 테스트용. 락 없는 테스트는 내부에서 no-op으로 override)
         every { idempotencyManager.execute(any(), any(), any(), any<Class<Any>>(), any<() -> Any>()) } answers {
             val userId = firstArg<String>()

@@ -9,9 +9,6 @@ import java.util.concurrent.TimeUnit
 class RedisLockManager(
     private val redissonClient: RedissonClient,
 ) : LockManager {
-    override fun <T> withLock(paymentKey: String, block: () -> T): T =
-        withLockByKey("lock:payment:$paymentKey", paymentKey, block)
-
     override fun <T> withLock(prefix: String, key: String, block: () -> T): T =
         withLockByKey("$prefix:$key", key, block)
 
