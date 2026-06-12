@@ -8,9 +8,12 @@ import com.leopay.bookingapi.lock.LockManager
 import com.leopay.bookingapi.lock.RedisLockManager
 import com.leopay.bookingapi.outbox.OutboxPublisher
 import com.leopay.bookingapi.service.PaymentService
+import com.leopay.core.enums.MerchantStatus
 import com.leopay.core.enums.PaymentMethod
 import com.leopay.core.enums.PaymentStatus
+import com.leopay.storage.entity.MerchantEntity
 import com.leopay.storage.entity.PaymentEntity
+import com.leopay.storage.repository.MerchantRepository
 import com.leopay.storage.repository.NotificationRepository
 import com.leopay.storage.repository.OutboxEventRepository
 import com.leopay.storage.repository.PaymentHistoryRepository
@@ -66,6 +69,9 @@ class ApprovePaymentConcurrencyTest {
     private lateinit var settlementDetailRepository: SettlementDetailRepository
 
     @Autowired
+    private lateinit var merchantRepository: MerchantRepository
+
+    @Autowired
     private lateinit var txManager: PlatformTransactionManager
 
     @Autowired
@@ -73,6 +79,8 @@ class ApprovePaymentConcurrencyTest {
 
     @Autowired
     private lateinit var objectMapper: ObjectMapper
+
+    private var merchantId: Long = 0L
 
     @MockkBean
     private lateinit var outboxPublisher: OutboxPublisher
@@ -112,6 +120,19 @@ class ApprovePaymentConcurrencyTest {
         paymentHistoryRepository.deleteAll()
         outboxEventRepository.deleteAll()
         paymentRepository.deleteAll()
+        merchantRepository.deleteAll()
+
+        merchantId = merchantRepository.save(
+            MerchantEntity(
+                businessNumber = "1234567890",
+                name = "동시성 테스트 가맹점",
+                bankCode = "088",
+                accountNumber = "123456789",
+                accountHolder = "테스트",
+                feeRate = BigDecimal("0.0300"),
+                status = MerchantStatus.ACTIVE,
+            )
+        ).id!!
 
         // OutboxPublisher는 Kafka 미연결 환경에서 예외를 던지지 않도록 no-op 처리
         every { outboxPublisher.publish() } returns Unit
@@ -181,7 +202,7 @@ class ApprovePaymentConcurrencyTest {
             paymentRepository.save(
                 PaymentEntity(
                     paymentKey = "test-key-no-lock",
-                    merchantId = 1L,
+                    merchantId = merchantId,
                     userId = "user-1",
                     amount = BigDecimal("10000"),
                     method = PaymentMethod.CARD,
@@ -242,7 +263,7 @@ class ApprovePaymentConcurrencyTest {
             paymentRepository.save(
                 PaymentEntity(
                     paymentKey = "test-key-with-lock",
-                    merchantId = 1L,
+                    merchantId = merchantId,
                     userId = "user-1",
                     amount = BigDecimal("10000"),
                     method = PaymentMethod.CARD,
