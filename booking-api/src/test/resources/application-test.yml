@@ -5,7 +5,7 @@ spring:
     username: leopay
     password: 1234
     hikari:
-      maximum-pool-size: 100
+      maximum-pool-size: 300
   jpa:
     hibernate:
       ddl-auto: none

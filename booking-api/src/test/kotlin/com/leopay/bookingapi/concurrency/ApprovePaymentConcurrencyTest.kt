@@ -176,7 +176,7 @@ class ApprovePaymentConcurrencyTest {
      * assert 없이 로그로만 확인 — 테스트는 항상 통과한다.
      */
     @Test
-    fun `동시 100req - 락 없을 때 중복 승인 발생`() {
+    fun `동시 1000req - 락 없을 때 중복 승인 발생`() {
         // LockManager no-op: 락 획득 없이 즉시 블록 실행
         every { lockManager.withLock(any<String>(), any<String>(), any<() -> Any>()) } answers {
             val block = thirdArg<() -> Any>()
@@ -189,7 +189,7 @@ class ApprovePaymentConcurrencyTest {
         }
         // gateway: 100ms 지연 후 응답 — 이 딜레이 동안 여러 스레드가 중복으로 처리 진입 가능
         coEvery { gateway.approve(any()) } coAnswers {
-            Thread.sleep(100L)
+            Thread.sleep(500L)
             PgApproveResponse(
                 pgTransactionId = "PG-${Thread.currentThread().threadId()}",
                 approvedAt = LocalDateTime.now(),
@@ -211,7 +211,7 @@ class ApprovePaymentConcurrencyTest {
             ).id!!
         }!!
 
-        val threadCount = 100
+        val threadCount = 1000
         val startLatch = CountDownLatch(1)
         val doneLatch = CountDownLatch(threadCount)
         val executor = Executors.newFixedThreadPool(threadCount)
@@ -234,7 +234,7 @@ class ApprovePaymentConcurrencyTest {
         }
 
         startLatch.countDown()
-        doneLatch.await(30, TimeUnit.SECONDS)
+        doneLatch.await(60, TimeUnit.SECONDS)
         executor.shutdown()
 
         val approvedCount = paymentHistoryRepository
@@ -256,7 +256,7 @@ class ApprovePaymentConcurrencyTest {
      * InvalidStatus 예외로 처리되고, APPROVED 이력은 정확히 1건이어야 한다.
      */
     @Test
-    fun `동시 100req - 락 있을 때 1건만 성공`() {
+    fun `동시 1000req - 락 있을 때 1건만 성공`() {
         val txTemplate = TransactionTemplate(txManager)
 
         val paymentId = txTemplate.execute {
@@ -272,7 +272,7 @@ class ApprovePaymentConcurrencyTest {
             ).id!!
         }!!
 
-        val threadCount = 100
+        val threadCount = 1000
         val startLatch = CountDownLatch(1)
         val doneLatch = CountDownLatch(threadCount)
         val executor = Executors.newFixedThreadPool(threadCount)
@@ -294,7 +294,7 @@ class ApprovePaymentConcurrencyTest {
         }
 
         startLatch.countDown()
-        doneLatch.await(30, TimeUnit.SECONDS)
+        doneLatch.await(60, TimeUnit.SECONDS)
         executor.shutdown()
 
         val approvedCount = paymentHistoryRepository
