@@ -41,10 +41,11 @@ class SettlementProcessor(
         }
 
         // B-5: feeAmount는 Consumer가 이미 계산하여 settlement_detail에 저장 — 재계산 불필요
-        // settlementAmount = amount - feeAmount, 원 단위(scale=0) HALF_EVEN 반올림
+        // settlementAmount = amount - feeAmount, 원 단위(scale=0) FLOOR(버림)
+        // 금융 정산 관행: 원 단위 미만은 절사 — PG사가 초과 지급하지 않도록 보장
         val settlementAmount = sd.amount
             .subtract(sd.feeAmount)
-            .setScale(0, RoundingMode.HALF_EVEN)
+            .setScale(0, RoundingMode.FLOOR)
 
         log.debug(
             "정산 상세 처리: settlementDetailId={}, paymentId={}, amount={}, feeRate={}, feeAmount={}, settlementAmount={}",

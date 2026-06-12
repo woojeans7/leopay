@@ -61,8 +61,8 @@ class SettlementProcessorTest {
     }
 
     @Test
-    fun `HALF_EVEN 반올림 - 소수점 0점5 경계에서 짝수 방향으로 반올림한다`() {
-        // 10001 - 350.5000 = 9650.5 → HALF_EVEN → 9650 (짝수 방향)
+    fun `원 단위 미만 절사 - 소수점 0점5 경계에서 버림 처리한다`() {
+        // 10001 - 350.5000 = 9650.5 → FLOOR → 9650 (절사)
         val detail = SettlementDetailEntity(
             id = 2L,
             settlementId = null,
@@ -82,8 +82,8 @@ class SettlementProcessorTest {
     }
 
     @Test
-    fun `소수점 올림 - 0점5 초과이면 올림 처리한다`() {
-        // 10001 - 350.4000 = 9650.6 → HALF_EVEN → 9651
+    fun `원 단위 미만 절사 - 소수점 0점5 초과도 버림 처리한다`() {
+        // 10001 - 350.4000 = 9650.6 → FLOOR → 9650 (절사, 올림 아님)
         val detail = SettlementDetailEntity(
             id = 3L,
             settlementId = null,
@@ -99,7 +99,7 @@ class SettlementProcessorTest {
         val result = processor.process(detail)
 
         assertThat(result).isNotNull
-        assertThat(result!!.settlementAmount).isEqualByComparingTo(BigDecimal("9651"))
+        assertThat(result!!.settlementAmount).isEqualByComparingTo(BigDecimal("9650"))
     }
 
     @Test
