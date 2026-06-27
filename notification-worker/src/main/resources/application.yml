@@ -1,8 +1,14 @@
 spring:
   application:
     name: notification-worker
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: prometheus, health
   datasource:
-    url: jdbc:mysql://localhost:3306/leopay?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul
+    url: jdbc:mysql://leopay-mysql.orb.local:3306/leopay?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul
     driver-class-name: com.mysql.cj.jdbc.Driver
     username: leopay
     password: 1234

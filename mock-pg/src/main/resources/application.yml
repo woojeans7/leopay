@@ -2,5 +2,11 @@ spring:
   application:
     name: mock-pg
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: prometheus, health
+
 server:
   port: 8081
