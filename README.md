@@ -133,7 +133,38 @@ leopay/
 
 ## 성능 테스트 결과
 
-> TODO: 4주차 — nGrinder 결과 캡처 + Grafana 대시보드 스크린샷 추가 예정
+### 테스트 환경
+
+| 항목 | 값 |
+|------|-----|
+| 도구 | nGrinder 3.x |
+| 대상 API | `POST /api/v1/payments` (결제 생성) |
+| VUser | 200 (Agent 1 × Process 20 × Thread 10) |
+| Ramp-Up | 30초 (1.5초마다 1 Process 추가) |
+| 지속 시간 | 1시간 |
+| 실행 환경 | 로컬 (Apple Silicon, 18GB RAM) |
+
+### 결과 요약
+
+| 지표 | 목표 | 실측 |
+|------|------|------|
+| 평균 TPS | ≥ 100 | **523.6** |
+| Peak TPS | - | 771.0 |
+| 평균 응답시간 | ≤ 200ms | 379.91ms |
+| P99 응답시간 | ≤ 500ms | 1,411ms |
+| 총 요청 수 | - | 1,877,929 |
+| 에러율 | ≤ 0.1% | **0.003%** (61건) |
+| 지속 시간 | 1시간 | 1시간 안정 유지 |
+
+> 에러 61건 전부 409 CONFLICT — 분산락이 동일 paymentKey 중복 요청을 차단한 정상 동작
+
+### nGrinder 리포트
+
+![nGrinder Summary](docs/assets/payments_api_ngrinder_summary.png)
+
+### Grafana P99 응답시간
+
+![Grafana P99](docs/assets/payments_api_grafana_p99_graph.png)
 
 ---
 
@@ -157,5 +188,4 @@ docker-compose up -d
 ./gradlew :booking-api:bootRun
 ./gradlew :mock-pg:bootRun
 ./gradlew :notification-worker:bootRun
-./gradlew :settlement-worker:bootRun
 ```
