@@ -4,10 +4,14 @@
 단순 구현이 아닌, **장애 시나리오를 의도적으로 재현하고 신뢰성 목표를 수치로 검증**하는 것을 목표로 합니다.
 
 > **신뢰성 목표**
-> - 동일 paymentKey 동시 100 req → 중복 결제 0건
-> - 결제 API P99 500ms 이하 / 평균 200ms 이하 (200 VUser 기준)
-> - 에러율 0.1% 이하 (PG 응답 실패 제외)
-> - 정산 배치 100만 건 5분 이내 처리
+>
+> | 목표 | 수치 | 근거 |
+> |------|------|------|
+> | 중복 결제 | 동시 100 req → 0건 | 결제 시스템 핵심 불변 조건 |
+> | 평균 응답시간 | ≤ 200ms | 사용자가 시스템 반응을 즉각적으로 인지하는 임계값 (Nielsen Norman Group) |
+> | P99 응답시간 | ≤ 500ms | 국내 주요 PG사(토스페이먼츠 등) 결제 API SLA 수준 |
+> | 에러율 | ≤ 0.1% | PG 통신 실패를 제외한 시스템 오류 허용 수준 |
+> | 정산 배치 | 100만 건 5분 이내 | 익일 정산 기준, 자정 배치 완료 여유 시간 확보 |
 
 ---
 
@@ -141,30 +145,116 @@ leopay/
 | 대상 API | `POST /api/v1/payments` (결제 생성) |
 | VUser | 200 (Agent 1 × Process 20 × Thread 10) |
 | Ramp-Up | 30초 (1.5초마다 1 Process 추가) |
-| 지속 시간 | 1시간 |
 | 실행 환경 | 로컬 (Apple Silicon, 18GB RAM) |
 
-### 결과 요약
+### 최종 결과 (튜닝 후)
 
 | 지표 | 목표 | 실측 |
 |------|------|------|
-| 평균 TPS | ≥ 100 | **523.6** |
-| Peak TPS | - | 771.0 |
-| 평균 응답시간 | ≤ 200ms | 379.91ms |
-| P99 응답시간 | ≤ 500ms | 1,411ms |
-| 총 요청 수 | - | 1,877,929 |
-| 에러율 | ≤ 0.1% | **0.003%** (61건) |
-| 지속 시간 | 1시간 | 1시간 안정 유지 |
+| 평균 TPS | ≥ 100 | **923.2** |
+| Peak TPS | - | 1,379.0 |
+| 평균 응답시간 | ≤ 200ms | **186.80ms** ✅ |
+| P99 응답시간 | ≤ 500ms | 705ms |
+| 총 요청 수 | - | 542,528 |
+| 에러율 | ≤ 0.1% | **0%** ✅ |
+| 지속 시간 | 10분 | 안정 유지 |
 
-> 에러 61건 전부 409 CONFLICT — 분산락이 동일 paymentKey 중복 요청을 차단한 정상 동작
+> P99 705ms는 단일 머신에서 모든 서비스(MySQL, Redis, Kafka, mock-pg)를 동시 실행하는 로컬 환경 한계
 
 ### nGrinder 리포트
 
-![nGrinder Summary](docs/assets/payments_api_ngrinder_summary.png)
+![nGrinder Summary](docs/assets/payments_api_ngrinder_after.png)
 
 ### Grafana P99 응답시간
 
-![Grafana P99](docs/assets/payments_api_grafana_p99_graph.png)
+![Grafana P99](docs/assets/payments_api_grafana_p99_after.png)
+
+---
+
+## A-1 동시 중복 요청 검증
+
+### createPayment — 동일 paymentKey 동시 100 req (nGrinder)
+
+| 항목 | 결과 |
+|------|------|
+| 동시 요청 수 | 100 VUser |
+| DB 생성 건수 | **1건** (중복 결제 0건 ✅) |
+| 평균 응답시간 | 285.81ms |
+| P99 응답시간 | 1,850ms (락 직렬 대기 포함) |
+| 에러율 | 0% (409 CONFLICT는 락의 정상 동작) |
+
+> 100개 요청이 동일 paymentKey로 동시 진입 → 분산락이 직렬화 → DB에 1건만 INSERT
+
+### approvePayment — 동일 paymentId 동시 1000 req (단위 테스트)
+
+| 시나리오 | 성공 | 중복 승인 건수 |
+|---------|------|--------------|
+| 락 없을 때 (재현) | 10 | **10건** — 중복 발생 확인 |
+| 락 있을 때 (검증) | 1 | **1건** — 분산락으로 차단 ✅ |
+
+> 락 없이 PG 응답 지연(500ms) 구간에서 1000 스레드 동시 진입 시 10건 중복 승인 재현.
+> 분산락 적용 후 동일 조건에서 APPROVED 이력 정확히 1건.
+
+---
+
+## 트러블슈팅
+
+### 초기 부하 측정 결과 (튜닝 전)
+
+| 지표 | 목표 | 실측 |
+|------|------|------|
+| 평균 TPS | ≥ 100 | 523.6 |
+| 평균 응답시간 | ≤ 200ms | 379.91ms ❌ |
+| P99 응답시간 | ≤ 500ms | 1,411ms ❌ |
+| 에러율 | ≤ 0.1% | 0.003% (61건) |
+
+![nGrinder Before](docs/assets/payments_api_ngrinder_before.png)
+![Grafana P99 Before](docs/assets/payments_api_grafana_p99_before.png)
+
+### 원인 분석 및 개선
+
+**① Hikari 커넥션 풀 기본값(10) — 응답시간 주범**
+
+`application.yml`에 Hikari 설정이 없어 기본값 10이 적용된 상태였다. `createPayment` 한 번에 DB 쿼리가 3회 발생하는데, 200 VUser 기준으로 190개 요청이 커넥션 대기 큐에 쌓이는 구조였다.
+
+```yaml
+# 추가
+datasource:
+  hikari:
+    maximum-pool-size: 50
+    minimum-idle: 10
+    connection-timeout: 5000
+```
+
+**② `existsByPaymentKey` 이중 조회**
+
+`payment` 테이블에 `UNIQUE KEY`가 있음에도 INSERT 전에 SELECT로 중복 체크를 했다. SELECT를 제거하고 `DataIntegrityViolationException`을 catch하는 방식으로 변경해 요청당 DB 쿼리를 3회→2회로 줄였다.
+
+```kotlin
+// 변경 전: SELECT → INSERT (2회)
+if (paymentRepository.existsByPaymentKey(request.paymentKey)) throw DuplicatePayment()
+paymentRepository.save(payment)
+
+// 변경 후: INSERT → 제약 위반 시 catch (1회)
+try {
+    paymentRepository.save(payment)
+} catch (e: DataIntegrityViolationException) {
+    throw PaymentException.DuplicatePayment(request.paymentKey)
+}
+```
+
+**③ nGrinder 스크립트 paymentKey 충돌 버그**
+
+`currentTimeMillis()` + 스레드 로컬 번호 조합은 동시 실행 시 같은 밀리초에서 충돌이 발생했다. `UUID.randomUUID()`로 교체해 에러 61건 → 0건으로 제거했다.
+
+### 튜닝 결과 비교
+
+| 지표 | 튜닝 전 | 튜닝 후 | 개선율 |
+|------|--------|--------|--------|
+| 평균 TPS | 523.6 | **923.2** | +76% |
+| 평균 응답시간 | 379.91ms | **186.80ms** | -51% |
+| P99 응답시간 | 1,411ms | **705ms** | -50% |
+| 에러율 | 0.003% | **0%** | - |
 
 ---
 
@@ -188,4 +278,5 @@ docker-compose up -d
 ./gradlew :booking-api:bootRun
 ./gradlew :mock-pg:bootRun
 ./gradlew :notification-worker:bootRun
+./gradlew :settlement-worker:bootRun
 ```

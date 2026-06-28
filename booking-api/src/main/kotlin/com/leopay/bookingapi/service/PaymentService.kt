@@ -17,6 +17,7 @@ import com.leopay.storage.repository.OutboxEventRepository
 import com.leopay.storage.repository.PaymentHistoryRepository
 import com.leopay.storage.repository.PaymentRepository
 import kotlinx.coroutines.runBlocking
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.annotation.Propagation
@@ -45,26 +46,26 @@ class PaymentService(
      * NOT_SUPPORTED: AOP 프록시가 기존 트랜잭션을 중단(suspend)한다.
      * withLock 블록 내에서 txTemplate.execute()가 새 트랜잭션을 시작하므로
      * "락 획득 → TX 시작 → DB 저장 → TX 커밋 → 락 해제" 순서가 보장된다.
-     * 락 해제 전에 커밋이 완료되므로 다른 요청이 진입해도 existsByPaymentKey가 true를 반환한다. (A-1)
+     * 락 해제 전에 커밋이 완료되므로 다른 요청이 진입해도 unique constraint가 중복 INSERT를 차단한다. (A-1)
      */
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     fun createPayment(userId: String, request: PaymentCreateRequest): PaymentCreateResponse {
         return lockManager.withLock("lock:payment", request.paymentKey) {
             txTemplate.execute {
-                if (paymentRepository.existsByPaymentKey(request.paymentKey)) {
+                val payment = try {
+                    paymentRepository.save(
+                        PaymentEntity(
+                            paymentKey = request.paymentKey,
+                            merchantId = request.merchantId,
+                            userId = userId,
+                            amount = request.amount,
+                            method = request.method,
+                            status = PaymentStatus.READY,
+                        )
+                    )
+                } catch (e: DataIntegrityViolationException) {
                     throw PaymentException.DuplicatePayment(request.paymentKey)
                 }
-
-                val payment = paymentRepository.save(
-                    PaymentEntity(
-                        paymentKey = request.paymentKey,
-                        merchantId = request.merchantId,
-                        userId = userId,
-                        amount = request.amount,
-                        method = request.method,
-                        status = PaymentStatus.READY,
-                    )
-                )
 
                 outboxEventRepository.save(
                     OutboxEventEntity(

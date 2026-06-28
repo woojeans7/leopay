@@ -6,13 +6,18 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     username: leopay
     password: 1234
+    hikari:
+      maximum-pool-size: 50   # 부하테스트 기준. 공식: (core×2)+1=21, 여유분 포함
+      minimum-idle: 10
+      connection-timeout: 5000  # 커넥션 대기 최대 5초 (기본 30초 → 빠른 실패)
+      idle-timeout: 600000
   jpa:
     hibernate:
       ddl-auto: update
     defer-datasource-initialization: true
     properties:
       hibernate:
-        format_sql: true
+        format_sql: false
   h2:
     console:
       enabled: true
