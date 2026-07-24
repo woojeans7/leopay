@@ -36,46 +36,57 @@
 ## Key Dependencies and Features
 
 ### 1. 멀티모듈 모놀리식 아키텍처
-- 도메인별 모듈로 분리하여 관심사를 명확히 구분 (booking-api, mock-pg, notification-worker, settlement-worker)
-- MSA가 아닌 단일 배포 단위로 운영 — 인프라 복잡도 없이 도메인 분리 효과를 취하는 의도적 선택
+- 도메인별 모듈로 분리하여 관심사를 명확히 구분 (booking-api: 8080, mock-pg: 8081, notification-worker: 8082, settlement-worker: 8083)
+- 프로세스는 독립 배포, Repository와 DB는 단일로 공유 — DB 분리, Service Discovery, API Gateway 같은 MSA 인프라는 도입하지 않는 의도적 선택
 - 공유 모듈(core-enum, db-core, logging, monitoring)을 통해 코드 중복 최소화
 
 ### 2. Redis 분산락 (중복 결제 방지)
 - 동일 paymentKey에 대한 동시 요청 시 Redisson 분산락으로 단 하나의 요청만 처리
-- 락 획득 실패 시 즉시 예외 반환 — 재시도 폭발 방지
+- 락 획득 실패 시(최대 3초 대기) 예외 반환 — 재시도 폭발 방지
 - 목표: 동시 100 req 환경에서 중복 결제 0건
 
-### 3. Transactional Outbox Pattern (Kafka 이벤트 유실 방지)
-- 결제 완료 시 DB 저장과 이벤트 발행을 하나의 트랜잭션으로 묶어 데이터 정합성 보장
-- Kafka 브로커 장애 시에도 Outbox 테이블 기반으로 재발행 가능
-- BEFORE_COMMIT: Outbox 테이블 저장 / AFTER_COMMIT: Kafka 발행
+### 3. Idempotency-Key 기반 재시도 멱등성
+- 클라이언트가 제출한 Idempotency-Key로 응답을 Redis에 캐싱(TTL 24h) — 동일 키 재시도 시 서비스 로직 재실행 없이 캐싱된 응답 그대로 반환
+- 키에 userId를 포함해 유저 간 키 충돌 방지 (`idempotency:{userId}:{apiName}:{idempotencyKey}`)
+- 이중 레이어: 1차 Redis 캐싱 → Redis 장애·TTL 만료 시 DB unique constraint(paymentKey)가 최후 방어선
 
-### 4. Kafka 기반 비동기 메시지 브로커
-- 결제 완료 이벤트(`payment.completed`)를 Kafka로 발행
+### 4. Transactional Outbox Pattern (Kafka 이벤트 유실 방지)
+- 결제 처리 시 DB 저장과 Outbox 이벤트 저장을 하나의 트랜잭션으로 묶어 데이터 정합성 보장
+- Kafka 브로커 장애 시에도 Outbox 테이블 기반으로 재발행 가능
+- OutboxPublisher가 1초 주기로 미발행 이벤트를 폴링하여 Kafka로 발행 (트랜잭션 커밋과 분리된 독립 스케줄러)
+
+### 5. Kafka 기반 비동기 메시지 브로커
+- 결제 승인 이벤트(`payment.approved`)를 Kafka로 발행
 - notification-worker, settlement-worker가 각각 독립적으로 이벤트 소비
 - 서비스 간 직접 호출 없이 느슨한 결합 실현
 
-### 5. 알림 처리 + DLT (Dead Letter Topic)
+### 6. 알림 처리 + DLT (Dead Letter Topic)
 - Kafka 컨슈머 실패 시 DLT로 이동하여 유실 없이 재처리
-- 멱등성 키(Redis)로 중복 소비 방지
-- DltEventConsumer가 실패 이벤트를 별도로 처리
+- 멱등성 처리로 중복 소비 방지
+- DltNotificationConsumer(notification-worker), SettlementDltConsumer(settlement-worker)가 실패 이벤트를 별도로 처리
 
-### 6. Spring Batch 정산
+### 7. Spring Batch 정산
 - 매일 자정 스케줄러가 정산 Job을 트리거
 - Reader → Processor(수수료 차감) → Writer 구조로 가맹점별 정산 금액 산출
 - Skip/Retry + 재시작 포인트로 배치 장애 복구 설계
 - 목표: 100만 건 기준 5분 이내 처리
 
-### 7. Mock PG (WebFlux 기반 장애 시뮬레이션)
+### 8. Mock PG (WebFlux 기반 장애 시뮬레이션)
 - 실제 PG사 없이 지연 응답, 랜덤 실패, 타임아웃을 시뮬레이션
 - `PaymentGateway` 인터페이스 추상화로 실제 PG 교체 가능한 구조
 - booking-api의 WebClient 타임아웃 + 폴백 처리 검증 용도
 
 ---
 
-## 시스템 아키텍처
+## 아키텍처
 
-> TODO: 4주차 — 아키텍처 다이어그램 추가 예정
+### 시스템 아키텍처
+4개의 서비스는 독립적으로 구성되며, 서비스 간 통신은 REST API와 Kafka를 사용합니다. 데이터 저장소, 캐시·분산락, 메시지 브로커, 모니터링 스택은 Docker Compose로 컨테이너화되어 관리됩니다.
+![system_architecture.png](docs/assets/system_architecture.png)
+
+### 소프트웨어 아키텍처
+결제 승인/취소 요청은 분산락으로 동시 진입을 직렬화한 뒤 Mock PG와 통신하며, 응답 지연 시 타임아웃과 fallback 처리로 스레드 고갈을 방지합니다. 처리 결과는 Transactional Outbox 패턴으로 결제 데이터와 같은 트랜잭션에 저장되어 Kafka 발행 유실을 차단하고, notification-worker와 settlement-worker는 이 이벤트를 비동기로 소비해 각자의 책임(알림 발송, 정산 집계)을 수행합니다. 컨슈머 처리가 반복 실패하면 DLT로 이동해 유실 없이 별도 재처리됩니다.
+![software_architecture.png](docs/assets/software_architecture.png)
 
 ---
 
@@ -100,6 +111,10 @@ leopay/
 
 ## 핵심 도메인
 
+### 도메인 다이어그램
+
+![domain_diagram.png](docs/assets/domain_diagram.png)
+
 ### 가맹점 (Merchant)
 - 가맹점 등록 (사업자번호, 상호명, 정산 계좌, 수수료율)
 - 가맹점 상태 관리 (활성 / 비활성 / 정지)
@@ -108,6 +123,7 @@ leopay/
 - 결제 요청 → Mock PG 승인 → 결제 완료
 - 결제 상태 관리: `READY → IN_PROGRESS → APPROVED → CANCEL_IN_PROGRESS → CANCELED` / `IN_PROGRESS → FAILED` / `CANCEL_IN_PROGRESS → CANCEL_FAILED`
 - 전체 취소 (부분 취소는 스코프 아웃)
+- ![payment_state_diagram.png](docs/assets/payment_state_diagram.png)
 
 ### Mock PG
 - WebFlux 기반 비동기 서버
@@ -115,7 +131,7 @@ leopay/
 - `PaymentGateway` 인터페이스 추상화 → 실제 PG 교체 가능한 구조
 
 ### 알림 (Notification)
-- 결제 완료 이벤트 발행 (`payment.completed` Kafka 토픽)
+- 결제 승인 이벤트 발행 (`payment.approved` Kafka 토픽)
 - 실패 시 DLT 이동 + 재처리
 
 ### 정산 (Settlement)
@@ -123,15 +139,6 @@ leopay/
 - 가맹점별 결제 집계 → 수수료 차감 → 정산 금액 산출
 - 정산 상태: `PENDING → COMPLETED → TRANSFERRED`
 - BigDecimal 사용 (부동소수점 오차 방지)
-
----
-
-## 핵심 기능 설명 및 다이어그램
-
-> TODO: 4주차 — 핵심 기능별 플로우 다이어그램 추가 예정
-> - 결제 플로우 (분산락 + Outbox 패턴)
-> - 정산 배치 플로우 (Spring Batch Job 구조)
-> - 장애 시나리오 재현 흐름
 
 ---
 
@@ -151,10 +158,10 @@ leopay/
 
 | 지표 | 목표 | 실측 |
 |------|------|------|
-| 평균 TPS | ≥ 100 | **923.2** |
+| 평균 TPS | ≥ 100 | **923.2** ✅ |
 | Peak TPS | - | 1,379.0 |
 | 평균 응답시간 | ≤ 200ms | **186.80ms** ✅ |
-| P99 응답시간 | ≤ 500ms | 705ms |
+| P99 응답시간 | ≤ 500ms | 705ms ❌ |
 | 총 요청 수 | - | 542,528 |
 | 에러율 | ≤ 0.1% | **0%** ✅ |
 | 지속 시간 | 10분 | 안정 유지 |
@@ -171,7 +178,7 @@ leopay/
 
 ---
 
-## A-1 동시 중복 요청 검증
+## 동시 중복 결제 방지 검증 (A-1)
 
 ### createPayment — 동일 paymentKey 동시 100 req (nGrinder)
 
