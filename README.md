@@ -1,6 +1,6 @@
-# LeoPay — 간편결제 서비스
+# LeoPay — PG(결제대행) 시스템
 
-가맹점에 카드 결제 기능을 제공하는 간편결제 시스템입니다.
+가맹점에 카드 결제 승인/취소와 정산을 대행하는 PG(전자지급결제대행) 시스템입니다.
 단순 구현이 아닌, **장애 시나리오를 의도적으로 재현하고 신뢰성 목표를 수치로 검증**하는 것을 목표로 합니다.
 
 > **신뢰성 목표**
@@ -71,9 +71,9 @@
 - Skip/Retry + 재시작 포인트로 배치 장애 복구 설계
 - 목표: 100만 건 기준 5분 이내 처리
 
-### 8. Mock PG (WebFlux 기반 장애 시뮬레이션)
-- 실제 PG사 없이 지연 응답, 랜덤 실패, 타임아웃을 시뮬레이션
-- `PaymentGateway` 인터페이스 추상화로 실제 PG 교체 가능한 구조
+### 8. Mock PG (WebFlux 기반 카드사/VAN 승인망 시뮬레이션)
+- LeoPay가 PG로서 실제 카드사·VAN에 승인을 요청하는 구간을 지연 응답, 랜덤 실패, 타임아웃으로 시뮬레이션
+- `PaymentGateway` 인터페이스 추상화로 실제 카드사/VAN 연동으로 교체 가능한 구조
 - booking-api의 WebClient 타임아웃 + 폴백 처리 검증 용도
 
 ---
@@ -120,15 +120,15 @@ leopay/
 - 가맹점 상태 관리 (활성 / 비활성 / 정지)
 
 ### 결제 (Payment)
-- 결제 요청 → Mock PG 승인 → 결제 완료
+- 결제 요청 → 카드사/VAN 승인(Mock PG) → 결제 완료
 - 결제 상태 관리: `READY → IN_PROGRESS → APPROVED → CANCEL_IN_PROGRESS → CANCELED` / `IN_PROGRESS → FAILED` / `CANCEL_IN_PROGRESS → CANCEL_FAILED`
 - 전체 취소 (부분 취소는 스코프 아웃)
 - ![payment_state_diagram.png](docs/assets/payment_state_diagram.png)
 
-### Mock PG
+### Mock PG (카드사/VAN 승인망 시뮬레이션)
 - WebFlux 기반 비동기 서버
 - 지연 응답, 랜덤 실패, 타임아웃 시뮬레이션
-- `PaymentGateway` 인터페이스 추상화 → 실제 PG 교체 가능한 구조
+- `PaymentGateway` 인터페이스 추상화 → 실제 카드사/VAN 연동으로 교체 가능한 구조
 
 ### 알림 (Notification)
 - 결제 승인 이벤트 발행 (`payment.approved` Kafka 토픽)
@@ -267,7 +267,7 @@ try {
 
 ## 스코프 아웃
 
-- 실제 PG사 연동 (TossPayments 등)
+- 실제 카드사/VAN 연동 (Mock PG로 대체)
 - 부분 취소
 - 실제 알림 발송 (SMS, 이메일, 푸시)
 - 사용자 인증/인가 (X-User-Id 헤더로 대체 — Auth는 API Gateway 책임)
