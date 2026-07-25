@@ -138,7 +138,7 @@ leopay/
 - Spring Batch 일일 정산 (매일 자정 기준)
 - 가맹점별 결제 집계 → 수수료 차감 → 정산 금액 산출
 - 정산 상태: `PENDING → COMPLETED → TRANSFERRED`
-- BigDecimal 사용 (부동소수점 오차 방지)
+- BigDecimal 사용 (부동소수점 오차 방지) — 수수료(중간 계산)는 HALF_EVEN, 최종 정산 금액(원 단위)은 FLOOR로 절사해 과지급 방지
 
 ---
 
@@ -271,6 +271,9 @@ try {
 - 부분 취소
 - 실제 알림 발송 (SMS, 이메일, 푸시)
 - 사용자 인증/인가 (X-User-Id 헤더로 대체 — Auth는 API Gateway 책임)
+- 가맹점 인증 (API Key/Secret 발급)
+- 가맹점 상태(정지/비활성) 검증
+- 정산 실제 송금 연동 (상태 전이만 시뮬레이션)
 - 프론트엔드
 
 ---
